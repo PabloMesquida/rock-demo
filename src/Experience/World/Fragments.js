@@ -34,17 +34,17 @@ export default class Fragments
 
         this.parameters = {
             delay: 5,         // Seconds before the fragments are launched
-            spawnMargin: 2.5, // How far beyond the edge of the screen they start
-            spawnMax: 10,     // Furthest start; the ones coming from the back can't start off screen
-            appearTime: 0.6,  // Seconds they take to grow to full size (hides the ones that start in view)
-            spin: 1.2,        // Maximum tumbling speed at launch (rad/s)
-            gravity: 1.6,     // Acceleration towards the centre (units/s²)
-            damping: 0.4,     // Linear and angular velocity lost per second while flying
-            grip: 10,         // Same, while touching something static: what makes them stick instead of roll
-            bounce: 0.15,     // Restitution
-            friction: 1,
-            stickSpeed: 0.15, // Below this speed (units/s) a resting fragment counts as still...
-            stickTime: 0.3,   // ...and after this many seconds still, it gets stuck
+            spawnMargin: 4.9, // How far beyond the edge of the screen they start
+            spawnMax: 24.3,   // Furthest start; the ones coming from the back can't start off screen
+            appearTime: 3,    // Seconds they take to grow to full size (hides the ones that start in view)
+            spin: 1.04,       // Maximum tumbling speed at launch (rad/s)
+            gravity: 5.04,    // Acceleration towards the centre (units/s²)
+            damping: 0.8,     // Linear and angular velocity lost per second while flying
+            grip: 4,          // Same, while touching something static: what makes them stick instead of roll
+            bounce: 0.19,     // Restitution
+            friction: 0.25,
+            stickSpeed: 1,    // Below this speed (units/s) a resting fragment counts as still...
+            stickTime: 2,     // ...and after this many seconds still, it gets stuck
             hitSpeed: 0.3     // Speed lost in one frame (units/s) for a contact to count as a hit on the rock
         }
 
@@ -306,11 +306,11 @@ export default class Fragments
         folder.add(this.parameters, 'grip').min(0).max(30).step(0.1)
         folder.add(this.parameters, 'bounce').min(0).max(1).step(0.01).onChange(setSurface)
         folder.add(this.parameters, 'friction').min(0).max(3).step(0.01).onChange(setSurface)
-        folder.add(this.parameters, 'stickSpeed').min(0).max(1).step(0.001).name('stick speed')
-        folder.add(this.parameters, 'stickTime').min(0).max(2).step(0.01).name('stick time')
+        folder.add(this.parameters, 'stickSpeed').min(0).max(3).step(0.001).name('stick speed')
+        folder.add(this.parameters, 'stickTime').min(0).max(5).step(0.01).name('stick time')
         folder.add(this.parameters, 'spawnMargin').min(0).max(10).step(0.1).name('spawn margin')
         folder.add(this.parameters, 'spawnMax').min(2).max(30).step(0.1).name('spawn max')
-        folder.add(this.parameters, 'appearTime').min(0).max(3).step(0.01).name('appear time')
+        folder.add(this.parameters, 'appearTime').min(0).max(6).step(0.01).name('appear time')
         folder.add(this.parameters, 'spin').min(0).max(6).step(0.01)
         folder.add(this, 'launch')
 
@@ -356,7 +356,8 @@ export default class Fragments
 
         for(const item of this.items)
         {
-            if(item.isStuck)
+            // A stuck fragment only needs updates until it is fully grown
+            if(item.isStuck && item.age >= this.parameters.appearTime)
                 continue
 
             // Mesh, growing from nothing right after the launch
@@ -376,6 +377,9 @@ export default class Fragments
 
             item.type.mesh.setMatrixAt(item.index, this.matrix)
             item.type.mesh.instanceMatrix.needsUpdate = true
+
+            if(item.isStuck)
+                continue
 
             // Touching the main rock or a stuck fragment: grip
             const isTouching = this.isTouchingStatic(item.collider)
