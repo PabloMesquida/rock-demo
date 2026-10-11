@@ -1,0 +1,30 @@
+*
+{
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body
+{
+    overflow: hidden;
+    background: #0c0b0e;
+}
+
+.threejs
+{
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    outline: none;
+    opacity: 0;
+    transition: opacity 1.4s ease;
+    touch-action: none;
+}
+
+.threejs.is-ready
+{
+    opacity: 1;
+}
