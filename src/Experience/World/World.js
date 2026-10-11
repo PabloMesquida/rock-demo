@@ -1,13 +1,15 @@
 import Experience from '../Experience.js'
 import Rock from './Rock.js'
 import Environment from './Environment.js'
+import Fragments from './Fragments.js'
 
 /**
  * Everything that lives in the 3D scene. Waits for the resources, then
- * creates the rock and the environment (lights + environment map).
+ * creates the rock, the environment (lights + environment map) and the
+ * fragments that fall on the rock.
  *
- * Future stages (physics, instances, TSL experiments) are meant to be added
- * here as new World/ classes, updated from update().
+ * Future stages (instances, TSL experiments) are meant to be added here as
+ * new World/ classes, updated from update().
  */
 export default class World
 {
@@ -30,6 +32,8 @@ export default class World
         this.rock = new Rock()
         this.environment = new Environment()
 
+        this.fragments = new Fragments(this.rock)
+
         this.camera.frame(this.rock.dimensions)
 
         // Compile the pipelines before showing the canvas to avoid a first-frame hitch
@@ -42,10 +46,16 @@ export default class World
     {
         if(this.rock)
             this.rock.update()
+
+        if(this.fragments)
+            this.fragments.update()
     }
 
     destroy()
     {
+        if(this.fragments)
+            this.fragments.destroy()
+
         if(this.rock)
             this.rock.destroy()
 

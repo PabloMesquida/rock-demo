@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu'
+import RAPIER from '@dimforge/rapier3d-compat'
 import Experience from '../Experience.js'
 
 /**
@@ -20,6 +21,7 @@ export default class Rock
         this.resources = this.experience.resources
         this.time = this.experience.time
         this.renderer = this.experience.renderer
+        this.physics = this.experience.physics
         this.debug = this.experience.debug
 
         this.resource = this.resources.items.rockModel
@@ -32,6 +34,7 @@ export default class Rock
         this.setMaterial()
         this.setTextures()
         this.setDimensions()
+        this.setCollider()
         this.setDebug()
     }
 
@@ -118,6 +121,31 @@ export default class Rock
             halfHeight: Math.max(Math.abs(box.min.y), Math.abs(box.max.y)),
             radius
         }
+    }
+
+    /**
+     * Static collider with the exact triangles of the mesh, in pivot space
+     * (the pivot has no rotation yet, so world = pivot space). The physics
+     * world lives in that space, which is why the body never has to move.
+     */
+    setCollider()
+    {
+        const position = this.mesh.geometry.attributes.position
+        const vertices = new Float32Array(position.count * 3)
+        const vertex = new THREE.Vector3()
+
+        for(let i = 0; i < position.count; i++)
+            vertex.fromBufferAttribute(position, i).applyMatrix4(this.mesh.matrixWorld).toArray(vertices, i * 3)
+
+        const indices = new Uint32Array(this.mesh.geometry.index.array)
+
+        // FIX_INTERNAL_EDGES: bodies sliding over the surface don't trip on
+        // the edges between triangles
+        this.body = this.physics.instance.createRigidBody(RAPIER.RigidBodyDesc.fixed())
+        this.collider = this.physics.instance.createCollider(
+            RAPIER.ColliderDesc.trimesh(vertices, indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES),
+            this.body
+        )
     }
 
     setDebug()

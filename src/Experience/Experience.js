@@ -6,6 +6,7 @@ import Time from './Utils/Time.js'
 import Resources from './Utils/Resources.js'
 import Camera from './Camera.js'
 import Renderer from './Renderer.js'
+import Physics from './Physics.js'
 import Background from './Background.js'
 import World from './World/World.js'
 import sources from './sources.js'
@@ -41,6 +42,7 @@ export default class Experience
         this.camera = new Camera()
         this.background = new Background() // Before the renderer: the render pipeline composites it
         this.renderer = new Renderer()
+        this.physics = new Physics()
 
         // Console access (window.experience) only while debugging
         if(this.debug.active)
@@ -59,17 +61,18 @@ export default class Experience
 
     /**
      * WebGPURenderer must finish its async init() before anything is rendered
-     * or before PMREMGenerator can be used, so the world and the loop start here.
+     * or before PMREMGenerator can be used, and Rapier has to load its WASM
+     * before any body is created, so the world and the loop start here.
      */
     async init()
     {
         try
         {
-            await this.renderer.init()
+            await Promise.all([ this.renderer.init(), this.physics.init() ])
         }
         catch(error)
         {
-            console.error('Experience: the renderer could not be initialised', error)
+            console.error('Experience: the renderer or the physics could not be initialised', error)
             return
         }
 
@@ -96,6 +99,7 @@ export default class Experience
     update()
     {
         this.camera.update()
+        this.physics.update()
         this.world.update()
         this.renderer.update()
     }
@@ -110,6 +114,7 @@ export default class Experience
         if(this.world)
             this.world.destroy()
 
+        this.physics.destroy()
         this.resources.destroy()
         this.camera.destroy()
         this.renderer.destroy()
