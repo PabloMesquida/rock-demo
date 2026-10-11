@@ -38,6 +38,7 @@ export default class Renderer
         this.instance.toneMappingExposure = 1.15
         this.instance.setSize(this.sizes.width, this.sizes.height)
         this.instance.setPixelRatio(this.sizes.pixelRatio)
+        this.instance.shadowMap.enabled = true // Lights and meshes opt in (Environment.js, Rock.js, Fragments.js)
     }
 
     setDebug()

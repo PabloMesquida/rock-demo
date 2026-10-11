@@ -35,6 +35,8 @@ export default class Fragments
         this.parameters = {
             delay: 5,         // Seconds before the fragments are launched
             spawnMargin: 2.5, // How far beyond the edge of the screen they start
+            spawnMax: 10,     // Furthest start; the ones coming from the back can't start off screen
+            appearTime: 0.6,  // Seconds they take to grow to full size (hides the ones that start in view)
             spin: 1.2,        // Maximum tumbling speed at launch (rad/s)
             gravity: 1.6,     // Acceleration towards the centre (units/s²)
             damping: 0.4,     // Linear and angular velocity lost per second while flying
@@ -49,7 +51,9 @@ export default class Fragments
         this.types = [
             { resource: 'rock01Model', count: 1 },
             { resource: 'rock02Model', count: 1 },
-            { resource: 'rock03Model', count: 1 }
+            { resource: 'rock03Model', count: 1 },
+            { resource: 'rock04Model', count: 1 },
+            { resource: 'rock05Model', count: 1 }
         ]
 
         this.isLaunched = false
@@ -117,6 +121,8 @@ export default class Fragments
             type.mesh.name = type.resource
             type.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
             type.mesh.frustumCulled = false // Its bounds know nothing about where the instances are
+            type.mesh.castShadow = true
+            type.mesh.receiveShadow = true
 
             for(let i = 0; i < type.count; i++)
                 type.mesh.setMatrixAt(i, this.matrix)
@@ -146,7 +152,7 @@ export default class Fragments
                 )
                 const collider = world.createCollider(colliderDesc, body)
 
-                this.items.push({ type, index, body, collider, isStuck: true, stillTime: 0 })
+                this.items.push({ type, index, body, collider, isStuck: true, stillTime: 0, age: 0 })
             }
         }
     }
@@ -170,8 +176,10 @@ export default class Fragments
     }
 
     /**
-     * Places the fragments around the main rock, just outside the screen, and
-     * lets them fall. Called once after the delay; the debug UI can repeat it.
+     * Places the fragments all around the main rock, as if it were the centre
+     * of a sphere, and lets them fall. Each one starts as close as it can
+     * while still being off screen. Called once after the delay; the debug UI
+     * can repeat it.
      */
     launch()
     {
@@ -181,27 +189,59 @@ export default class Fragments
         camera.updateMatrixWorld()
         pivot.updateMatrixWorld()
 
-        // Size of the screen at the depth of the rock
-        const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * camera.position.length()
-        const halfWidth = halfHeight * camera.aspect
-
         const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
         const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1)
+        const toCamera = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 2)
+        const cameraDistance = camera.position.length()
+        const tanVertical = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)
+        const tanHorizontal = tanVertical * camera.aspect
+
+        // Nothing comes straight through the lens: directions inside this cone
+        // around the camera are pushed to its edge
+        const cameraCone = THREE.MathUtils.degToRad(30)
+
+        const direction = new THREE.Vector3()
+        const sideways = new THREE.Vector3()
         const position = new THREE.Vector3()
         const quaternion = new THREE.Quaternion()
         const spin = new THREE.Vector3()
-        const startAngle = Math.random() * Math.PI * 2
+        const turn = new THREE.Quaternion().random() // A different arrangement on every launch
+        const count = this.items.length
 
         this.items.forEach((item, i) =>
         {
-            // Spread around the screen, each one a bit further than the edge
-            const angle = startAngle + ((i + (Math.random() - 0.5) * 0.5) / this.items.length) * Math.PI * 2
-            const cos = Math.cos(angle)
-            const sin = Math.sin(angle)
-            const edge = Math.min(halfWidth / Math.abs(cos), halfHeight / Math.abs(sin))
-            const distance = edge + this.parameters.spawnMargin * (1 + Math.random() * 0.5)
+            // Evenly spread over the sphere (Fibonacci lattice)
+            const y = 1 - ((i + 0.5) / count) * 2
+            const ring = Math.sqrt(1 - y * y)
+            const angle = i * Math.PI * (3 - Math.sqrt(5))
 
-            position.set(0, 0, 0).addScaledVector(right, cos * distance).addScaledVector(up, sin * distance)
+            direction.set(Math.cos(angle) * ring, y, Math.sin(angle) * ring).applyQuaternion(turn)
+
+            let towardsCamera = direction.dot(toCamera)
+
+            if(towardsCamera > Math.cos(cameraCone))
+            {
+                sideways.copy(direction).addScaledVector(toCamera, - towardsCamera)
+
+                if(sideways.lengthSq() < 1e-8)
+                    sideways.copy(right)
+
+                sideways.normalize()
+                direction.copy(toCamera).multiplyScalar(Math.cos(cameraCone)).addScaledVector(sideways, Math.sin(cameraCone))
+                towardsCamera = Math.cos(cameraCone)
+            }
+
+            // Distance at which the direction leaves the screen by its side or
+            // by its top/bottom. Towards the back it may never do
+            const horizontal = Math.abs(direction.dot(right)) + towardsCamera * tanHorizontal
+            const vertical = Math.abs(direction.dot(up)) + towardsCamera * tanVertical
+            const edge = Math.min(
+                horizontal > 1e-3 ? (cameraDistance * tanHorizontal) / horizontal : Infinity,
+                vertical > 1e-3 ? (cameraDistance * tanVertical) / vertical : Infinity
+            )
+            const distance = Math.min(edge + this.parameters.spawnMargin * (1 + Math.random() * 0.5), this.parameters.spawnMax)
+
+            position.copy(direction).multiplyScalar(distance)
             pivot.worldToLocal(position)
 
             quaternion.random()
@@ -216,6 +256,7 @@ export default class Fragments
 
             item.isStuck = false
             item.stillTime = 0
+            item.age = 0
         })
 
         this.isLaunched = true
@@ -261,6 +302,8 @@ export default class Fragments
         folder.add(this.parameters, 'stickSpeed').min(0).max(1).step(0.001).name('stick speed')
         folder.add(this.parameters, 'stickTime').min(0).max(2).step(0.01).name('stick time')
         folder.add(this.parameters, 'spawnMargin').min(0).max(10).step(0.1).name('spawn margin')
+        folder.add(this.parameters, 'spawnMax').min(2).max(30).step(0.1).name('spawn max')
+        folder.add(this.parameters, 'appearTime').min(0).max(3).step(0.01).name('appear time')
         folder.add(this.parameters, 'spin').min(0).max(6).step(0.01)
         folder.add(this, 'launch')
 
@@ -309,9 +352,12 @@ export default class Fragments
             if(item.isStuck)
                 continue
 
-            // Mesh
+            // Mesh, growing from nothing right after the launch
+            item.age += delta
+
             this.position.copy(item.body.translation())
             this.quaternion.copy(item.body.rotation())
+            this.scale.setScalar(THREE.MathUtils.smoothstep(item.age, 0, this.parameters.appearTime))
             this.matrix.compose(this.position, this.quaternion, this.scale)
             item.type.mesh.setMatrixAt(item.index, this.matrix)
             item.type.mesh.instanceMatrix.needsUpdate = true

@@ -48,6 +48,9 @@ export default class Rock
                 this.mesh = child
         })
 
+        this.mesh.castShadow = true
+        this.mesh.receiveShadow = true
+
         // Centre the model on the origin (the GLB node is translated ~1.97 on X)
         this.model.updateMatrixWorld(true)
         const center = new THREE.Box3().setFromObject(this.model).getCenter(new THREE.Vector3())

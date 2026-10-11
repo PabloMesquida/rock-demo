@@ -38,7 +38,7 @@ src/Experience/Utils/               EventEmitter, Sizes, Time, Resources, Debug
 src/Experience/World/World.js       espera a Resources; crea Rock, Environment y Fragments; update() de lo que vive en escena
 src/Experience/World/Rock.js        modelo, anisotropy, pivot de rotación, dimensiones para el encuadre, collider trimesh
 src/Experience/World/Fragments.js   rocas chicas: un InstancedMesh por modelo, un cuerpo con hull convexo por roca, launch()
-src/Experience/World/Environment.js key + rim light y env map PMREM de un "night studio" procedural
+src/Experience/World/Environment.js key + rim light (ambas con sombras) y env map PMREM de un "night studio" procedural
 ```
 
 Convenciones (las del PDF, respetarlas):
@@ -62,7 +62,8 @@ Convenciones (las del PDF, respetarlas):
 
 Rapier en CPU. La primera versión seguía `19 — TSL - Sphere Particles Physics` (compute en GPU con esferas), pero se cambió para que las rocas apoyen con su forma real; de la lección quedan la gravedad hacia el centro y el delta limitado.
 
-- **Espacio del pivot:** el mundo de Rapier está expresado en el espacio de `rock.pivot`, donde la roca principal no se mueve. Las mallas de los fragmentos son hijas del pivot, así que los pegados giran con la roca sin tocar la física. `launch()` calcula las posiciones iniciales en mundo (fuera de los bordes de la pantalla, según la cámara) y las pasa a ese espacio.
+- **Espacio del pivot:** el mundo de Rapier está expresado en el espacio de `rock.pivot`, donde la roca principal no se mueve. Las mallas de los fragmentos son hijas del pivot, así que los pegados giran con la roca sin tocar la física. `launch()` calcula las posiciones iniciales en mundo y las pasa a ese espacio.
+- **Lanzamiento:** las direcciones se reparten parejas sobre una esfera alrededor de la roca principal (retícula de Fibonacci con un giro al azar), así que llegan de todos lados, también desde el fondo y desde detrás de la cámara. Cada una arranca a la menor distancia en la que queda fuera de cuadro más `spawnMargin`, con tope en `spawnMax`: las que vienen del fondo no pueden salir de cuadro y arrancan a la vista, por eso todas crecen desde escala 0 durante `appearTime`. Las direcciones a menos de 30° del eje de la cámara se corren al borde de ese cono para que ninguna atraviese la lente.
 - **Colliders:** la roca principal es un cuerpo fijo con un `trimesh` de sus triángulos reales (`Rock.setCollider()`); un hull le taparía las concavidades. Cada fragmento es un cuerpo dinámico con `convexHull` de sus vértices y CCD activado.
 - **Gravedad:** el mundo no tiene gravedad global. `Fragments.update()` aplica a cada cuerpo un impulso hacia el origen (`gravity · masa · delta`).
 - **Pegado:** mientras un fragmento toca algo fijo, su damping pasa de `damping` a `grip` (deja de rodar). Si además se mantiene por debajo de `stickSpeed` durante `stickTime`, su cuerpo pasa a `Fixed` y los siguientes pueden apilarse encima. Con `grip` bajo ruedan varios segundos antes de fijarse; `stickSpeed` tiene que quedar por encima de `gravity / grip` o no se pegan en pendiente.
@@ -70,6 +71,15 @@ Rapier en CPU. La primera versión seguía `19 — TSL - Sphere Particles Physic
 - Antes de `launch()` los cuerpos están deshabilitados y las instancias estacionadas en `y = 1000` (fuera del far plane), para que los pipelines se compilen durante el fade inicial.
 - `world.free()` libera todos los cuerpos y colliders: no hay que quitarlos uno por uno en `destroy()`.
 - `#debug` → carpeta `fragments`: parámetros, botón `launch` para repetir la caída y `show colliders` (líneas de `world.debugRender()`).
+
+## Sombras
+
+Todas las rocas generan y reciben sombras de las dos luces direccionales. `renderer.shadowMap.enabled` se activa en `Renderer.js`; cada luz se configura en `Environment.setShadow()` y cada malla activa `castShadow` / `receiveShadow` en su clase.
+
+- La cámara de sombra de cada luz es una caja de ±2 centrada en el origen, con near 0.1 y far 12: cubre la roca principal con rocas apiladas y cualquier posición de luz que permita el panel. Si el conjunto crece más allá de 2 unidades del centro, hay que agrandarla.
+- Mapas de 2048², PCF (el tipo por defecto), `bias` −0.0005. `normalBias` y `radius` van por luz: key 0.02 y 2; rim 0.034 y 5. Los tres se ajustan en `#debug` → `environment` → cada luz.
+- El env map no proyecta sombras, así que las zonas en sombra no quedan negras.
+- Un fragmento en vuelo solo proyecta sombra cuando entra en esa caja.
 
 ## Three r186 + WebGPU: trampas conocidas
 
@@ -86,13 +96,13 @@ Rapier en CPU. La primera versión seguía `19 — TSL - Sphere Particles Physic
 
 ## Assets: `public/models/rock_NN/rockDemo_NN.glb`
 
-`rock_00` es la roca principal; `rock_01`, `rock_02` y `rock_03` son los fragmentos (mismo formato; texturas 1024² / 512², ~0.45 de diámetro frente a 0.67 × 1.23 × 0.81 de la principal). Lo que sigue describe `rock_00`:
+`rock_00` es la roca principal; de `rock_01` en adelante son los fragmentos (mismo formato; texturas 1024² / 512², ~0.45 de diámetro frente a 0.67 × 1.23 × 0.81 de la principal). Lo que sigue describe `rock_00`:
 
 - Exportado desde Blender (Khronos glTF I/O). Es autocontenido: material "Rock" con baseColor, normal y occlusion embebidas como WebP 2048² (`EXT_texture_webp`), roughness 0.9 y metalness 0, doubleSided.
 - Requiere `EXT_meshopt_compression` y `EXT_texture_webp`: el `GLTFLoader` de `Resources` ya tiene `setMeshoptDecoder(MeshoptDecoder)`; WebP lo soporta sin configurar nada.
 - `GLTFLoader` resuelve flipY, espacios de color y la convención del normal map. Sin tangentes, deja `normalScale = (1, -1)`, que es lo correcto, así que no tocarlo. El código solo ajusta la anisotropy (8).
 - El nodo viene desplazado ~1.97 en X: `Rock.setModel()` lo centra dentro de un pivot y **el pivot es lo que gira**.
-- Los originales están en `../00/` … `../03/` (carpetas locales, fuera del repo). En Blender, la AO necesita el grupo "glTF Material Output" o no se exporta.
+- Los originales de cada roca están en `../NN/` (carpetas locales, fuera del repo). En Blender, la AO necesita el grupo "glTF Material Output" o no se exporta.
 - La roca es muy oscura (albedo ≈ 0.08 sRGB): la luminancia lineal de la escena tiene mediana ≈ 0.02 y máximo ≈ 0.2. Por eso el threshold del bloom es 0.015.
 
 ## Dirección visual
@@ -101,4 +111,4 @@ Producto en estudio oscuro, nocturno, minimalista. La roca protagonista, centrad
 
 Los valores finales los ajustó el usuario en el panel `#debug` y ya están como defaults en el código: cámara (`Camera.js` → `framing`), fondo (`Background.js` → `parameters`), exposure (`Renderer.js`), bloom (`PostProcessing.js` → `parameters`), luces y env map (`Environment.js`). **No cambiarlos sin pedirlo.** Si un cambio los afecta, avisar.
 
-Los valores de `Fragments.js` (`parameters`) son un primer ajuste hecho sin verlo en tiempo real: todavía no los validó el usuario. El encuadre de la cámara solo tiene en cuenta la roca principal: con muchas rocas el conjunto puede salirse del cuadro.
+Los valores de `Fragments.js` (`parameters`) y la sombra de la key light son un primer ajuste hecho sin verlo en tiempo real: todavía no los validó el usuario. La rim light (incluida su sombra) y la intensidad del env map sí los ajustó él. El encuadre de la cámara solo tiene en cuenta la roca principal: con muchas rocas el conjunto puede salirse del cuadro.
