@@ -44,7 +44,8 @@ export default class Fragments
             bounce: 0.15,     // Restitution
             friction: 1,
             stickSpeed: 0.15, // Below this speed (units/s) a resting fragment counts as still...
-            stickTime: 0.3    // ...and after this many seconds still, it gets stuck
+            stickTime: 0.3,   // ...and after this many seconds still, it gets stuck
+            hitSpeed: 0.3     // Speed lost in one frame (units/s) for a contact to count as a hit on the rock
         }
 
         // One entry per model; "count" instances of each
@@ -53,7 +54,10 @@ export default class Fragments
             { resource: 'rock02Model', count: 1 },
             { resource: 'rock03Model', count: 1 },
             { resource: 'rock04Model', count: 1 },
-            { resource: 'rock05Model', count: 1 }
+            { resource: 'rock05Model', count: 1 },
+            { resource: 'rock06Model', count: 1 },
+            { resource: 'rock07Model', count: 1 },
+            { resource: 'rock08Model', count: 1 }
         ]
 
         this.isLaunched = false
@@ -63,6 +67,8 @@ export default class Fragments
         this.quaternion = new THREE.Quaternion()
         this.scale = new THREE.Vector3(1, 1, 1)
         this.matrix = new THREE.Matrix4()
+        this.swayMatrix = new THREE.Matrix4()
+        this.impulse = new THREE.Vector3()
 
         this.setTypes()
         this.setBodies()
@@ -152,7 +158,7 @@ export default class Fragments
                 )
                 const collider = world.createCollider(colliderDesc, body)
 
-                this.items.push({ type, index, body, collider, isStuck: true, stillTime: 0, age: 0 })
+                this.items.push({ type, index, body, collider, isStuck: true, stillTime: 0, age: 0, velocity: new THREE.Vector3() })
             }
         }
     }
@@ -257,6 +263,7 @@ export default class Fragments
             item.isStuck = false
             item.stillTime = 0
             item.age = 0
+            item.velocity.set(0, 0, 0)
         })
 
         this.isLaunched = true
@@ -359,6 +366,14 @@ export default class Fragments
             this.quaternion.copy(item.body.rotation())
             this.scale.setScalar(THREE.MathUtils.smoothstep(item.age, 0, this.parameters.appearTime))
             this.matrix.compose(this.position, this.quaternion, this.scale)
+
+            // The meshes are children of the pivot, which sways when the rock
+            // is hit: undo that for the ones that are still far from it
+            const independence = THREE.MathUtils.smoothstep(this.position.length(), 1.5, 3.5)
+
+            if(independence > 0)
+                this.matrix.premultiply(this.rock.getSwayMatrix(independence, this.swayMatrix).invert())
+
             item.type.mesh.setMatrixAt(item.index, this.matrix)
             item.type.mesh.instanceMatrix.needsUpdate = true
 
@@ -369,8 +384,17 @@ export default class Fragments
             item.body.setLinearDamping(damping)
             item.body.setAngularDamping(damping)
 
-            // Still for long enough while touching: stick
+            // A sudden loss of speed against something static is a hit: the
+            // rock receives the momentum the fragment lost
             const linvel = item.body.linvel()
+
+            this.impulse.copy(item.velocity).sub(linvel)
+            item.velocity.copy(linvel)
+
+            if(isTouching && this.impulse.length() > this.parameters.hitSpeed)
+                this.rock.hit(this.position, this.impulse.multiplyScalar(item.body.mass()))
+
+            // Still for long enough while touching: stick
             const angvel = item.body.angvel()
             const speed = Math.hypot(linvel.x, linvel.y, linvel.z) + Math.hypot(angvel.x, angvel.y, angvel.z) * item.type.radius
 

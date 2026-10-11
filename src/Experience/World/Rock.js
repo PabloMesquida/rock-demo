@@ -2,6 +2,11 @@ import * as THREE from 'three/webgpu'
 import RAPIER from '@dimforge/rapier3d-compat'
 import Experience from '../Experience.js'
 
+const _up = new THREE.Vector3(0, 1, 0)
+const _scale = new THREE.Vector3(1, 1, 1)
+const _vector = new THREE.Vector3()
+const _quaternion = new THREE.Quaternion()
+
 /**
  * The rock model (rockDemo_00.glb).
  *
@@ -11,6 +16,9 @@ import Experience from '../Experience.js'
  *   Only texture anisotropy is adjusted here (glTF has no setting for it).
  * - The model is wrapped in a pivot group and offset so its centre sits on
  *   the rotation axis: the pivot spins, the model never drifts.
+ * - A hit (World/Fragments.js) knocks the pivot a little off its place and a
+ *   damped spring brings it back. It is only visual: in the physics world
+ *   the rock never moves.
  */
 export default class Rock
 {
@@ -27,7 +35,20 @@ export default class Rock
         this.resource = this.resources.items.rockModel
 
         this.parameters = {
-            rotationSpeed: 0.12 // Radians per second (~52 s per turn)
+            rotationSpeed: 0.12,   // Radians per second (~52 s per turn)
+            hitPush: 4,            // Speed the rock gains per unit of momentum it receives
+            hitTilt: 15,           // Same for the tipping: angular speed per unit of angular momentum
+            recoverFrequency: 1.2, // Swings per second while it goes back to its place
+            recoverDamping: 0.35   // 0 = swings forever, 1 = goes back without overshooting
+        }
+
+        // Displacement caused by the hits, in pivot space
+        this.spin = 0
+        this.sway = {
+            offset: new THREE.Vector3(),
+            offsetVelocity: new THREE.Vector3(),
+            tilt: new THREE.Vector3(), // Rotation vector: direction = axis, length = angle
+            tiltVelocity: new THREE.Vector3()
         }
 
         this.setModel()
@@ -164,11 +185,60 @@ export default class Rock
         })
         folder.add(this.material, 'aoMapIntensity').min(0).max(2).step(0.01).name('ao intensity')
         folder.add(this.material, 'roughness').min(0).max(1).step(0.001)
+        folder.add(this.parameters, 'hitPush').min(0).max(15).step(0.01).name('hit push')
+        folder.add(this.parameters, 'hitTilt').min(0).max(60).step(0.1).name('hit tilt')
+        folder.add(this.parameters, 'recoverFrequency').min(0.2).max(5).step(0.01).name('recover frequency')
+        folder.add(this.parameters, 'recoverDamping').min(0).max(1).step(0.01).name('recover damping')
+    }
+
+    /**
+     * Something hit the rock. Both vectors in pivot space.
+     *
+     * @param {THREE.Vector3} point   Where, relative to the centre
+     * @param {THREE.Vector3} impulse Momentum the rock receives
+     */
+    hit(point, impulse)
+    {
+        this.sway.offsetVelocity.addScaledVector(impulse, this.parameters.hitPush)
+        this.sway.tiltVelocity.addScaledVector(_vector.crossVectors(point, impulse), this.parameters.hitTilt)
+    }
+
+    /**
+     * Current displacement as a matrix in pivot space. "amount" scales it:
+     * Fragments.js uses it to keep the rocks that are still far away from
+     * swaying with the pivot they are children of.
+     */
+    getSwayMatrix(amount, target)
+    {
+        const angle = this.sway.tilt.length() * amount
+
+        _quaternion.setFromAxisAngle(_vector.copy(this.sway.tilt).normalize(), angle)
+
+        return target.compose(_vector.copy(this.sway.offset).multiplyScalar(amount), _quaternion, _scale)
     }
 
     update()
     {
-        this.pivot.rotation.y += this.parameters.rotationSpeed * this.time.delta
+        const delta = this.time.delta
+        const { offset, offsetVelocity, tilt, tiltVelocity } = this.sway
+
+        this.spin += this.parameters.rotationSpeed * delta
+
+        // Damped spring back to rest, for the position and for the tilt
+        const frequency = this.parameters.recoverFrequency * Math.PI * 2
+        const stiffness = frequency * frequency
+        const damping = this.parameters.recoverDamping * frequency * 2
+
+        offsetVelocity.addScaledVector(offset, - stiffness * delta).addScaledVector(offsetVelocity, - damping * delta)
+        offset.addScaledVector(offsetVelocity, delta)
+
+        tiltVelocity.addScaledVector(tilt, - stiffness * delta).addScaledVector(tiltVelocity, - damping * delta)
+        tilt.addScaledVector(tiltVelocity, delta)
+
+        // Spin around Y, then the displacement inside the spinning space
+        this.pivot.quaternion.setFromAxisAngle(_up, this.spin)
+        this.pivot.position.copy(offset).applyQuaternion(this.pivot.quaternion)
+        this.pivot.quaternion.multiply(_quaternion.setFromAxisAngle(_vector.copy(tilt).normalize(), tilt.length()))
     }
 
     destroy()
