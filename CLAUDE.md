@@ -34,19 +34,20 @@ src/Experience/Renderer.js          WebGPURenderer (antialias false) + tone mapp
 src/Experience/Physics.js           mundo de Rapier sin gravedad global; init() async y un step por frame
 src/Experience/PostProcessing.js    THREE.RenderPipeline: scene pass → bloom → renderOutput → fondo → FXAA → dither
 src/Experience/Background.js        gradiente radial como nodo TSL (uniforms), en espacio de display sRGB
-src/Experience/Utils/               EventEmitter, Sizes, Time, Resources, Debug
+src/Experience/Utils/               EventEmitter, Sizes, Time, Resources, Debug, Pointer
 src/Experience/World/World.js       espera a Resources; crea Rock, Environment y Fragments; update() de lo que vive en escena
-src/Experience/World/Rock.js        modelo, anisotropy, pivot de rotación, dimensiones para el encuadre, collider trimesh
-src/Experience/World/RockInstances.js un modelo de roca como InstancedMesh (geometría centrada, material del GLB, sombras)
+src/Experience/World/Rock.js        modelo, anisotropy, pivot de rotación, dimensiones para el encuadre, collider trimesh, reacción a golpes y al puntero
+src/Experience/World/Sway.js        desplazamiento que vuelve solo: posición + inclinación con resorte amortiguado
+src/Experience/World/RockInstances.js un modelo de roca como InstancedMesh (geometría centrada, material del GLB, sombras) y su hull para Rapier
 src/Experience/World/Fragments.js   rocas que caen y se pegan: un cuerpo con hull convexo por roca, launch()
-src/Experience/World/Orbiters.js    rocas pequeñas que orbitan: elipses analíticas, sin física
+src/Experience/World/Orbiters.js    rocas pequeñas que orbitan: cuerpos con hull guiados por una elipse
 src/Experience/World/Environment.js key + rim light (ambas con sombras) y env map PMREM de un "night studio" procedural
 ```
 
 Convenciones (las del PDF, respetarlas):
 - Una clase por archivo, `export default class`. Estilo del PDF: llaves en línea propia (Allman), sin punto y coma, 4 espacios.
 - Las clases obtienen lo que necesitan con `this.experience = new Experience()` (singleton). Excepciones: `PostProcessing` recibe el renderer por parámetro porque se crea dentro del constructor de `Renderer`; `Fragments` recibe la roca y `Orbiters` recibe los fragmentos porque `experience.world` puede no existir todavía mientras corre `World.setup()`; `RockInstances` recibe modelo, cantidad y padre, como `Resources` recibe sus fuentes.
-- Métodos `setX()` en el constructor (`setInstance`, `setModel`, `setDebug`…). Además `resize()`, `update()` y `destroy()` cuando hacen falta, llamados desde el padre (nunca escuchar `window` directamente salvo en `Sizes`).
+- Métodos `setX()` en el constructor (`setInstance`, `setModel`, `setDebug`…). Además `resize()`, `update()` y `destroy()` cuando hacen falta, llamados desde el padre (nunca escuchar `window` directamente salvo en `Sizes`; el puntero se lee de `experience.pointer`, que escucha el canvas).
 - Eventos con `EventEmitter`: `sizes 'resize'`, `time 'tick'`, `resources 'ready'` (más `'progress'` y `'error'`). Para no perder un `'ready'` que ya ocurrió, usar `resources.whenReady(cb)`. Si un asset falla, `'ready'` no llega nunca y el canvas queda invisible: mirar la consola.
 - `Time` mide en **segundos** (el PDF usa ms). Toda animación usa `this.time.delta`. El delta está limitado a 0.1 s.
 - Debug: solo con `#debug` en la URL. Cada clase crea su carpeta (`this.debug.ui.addFolder(...)`) dentro de `if(this.debug.active)`. `window.experience` solo existe en modo debug.
@@ -70,7 +71,9 @@ Rapier en CPU. La primera versión seguía `19 — TSL - Sphere Particles Physic
 - **Colliders:** la roca principal es un cuerpo fijo con un `trimesh` de sus triángulos reales (`Rock.setCollider()`); un hull le taparía las concavidades. Cada fragmento es un cuerpo dinámico con `convexHull` de sus vértices y CCD activado.
 - **Gravedad:** el mundo no tiene gravedad global. `Fragments.update()` aplica a cada cuerpo un impulso hacia el origen (`gravity · masa · delta`).
 - **Pegado:** mientras un fragmento toca algo fijo, su damping pasa de `damping` a `grip` (deja de rodar). Si además se mantiene por debajo de `stickSpeed` durante `stickTime`, su cuerpo pasa a `Fixed` y los siguientes pueden apilarse encima. Con `grip` bajo ruedan varios segundos antes de fijarse; `stickSpeed` tiene que quedar por encima de `gravity / grip` o no se pegan en pendiente.
-- **Reacción al golpe:** cuando un fragmento pierde de golpe más de `hitSpeed` de velocidad contra algo fijo, `Fragments` llama a `rock.hit(punto, impulso)` con el momento que perdió. `Rock` lo convierte en un empujón y una inclinación del pivot (`hitPush`, `hitTilt`) y un resorte amortiguado lo devuelve a su lugar (`recoverFrequency`, `recoverDamping`). Es solo visual: en Rapier la roca sigue fija. Como las mallas de los fragmentos son hijas del pivot, a los que todavía están lejos (más de 1.5–3.5 unidades del centro) se les descuenta ese movimiento con `rock.getSwayMatrix()`, para que no se sacudan en pleno vuelo.
+- **Reacción al golpe:** cuando un fragmento pierde de golpe más de `hitSpeed` de velocidad contra algo fijo, `Fragments` llama a `rock.hit(punto, impulso)` con el momento que perdió. `Rock` lo convierte en un empujón y una inclinación del pivot (`hitPush`, `hitTilt`) y un resorte amortiguado lo devuelve a su lugar (`recoverFrequency`, `recoverDamping`). El estado y el resorte están en `Sway.js` (`rock.sway`). Es solo visual: en Rapier la roca sigue fija. Como las mallas de los fragmentos son hijas del pivot, a los que todavía están en vuelo y lejos (más de 1.5–3.5 unidades del centro) se les descuenta ese movimiento con `rock.sway.getMatrix()`, para que no se sacudan.
+- **Puntero:** mientras el puntero se mueve cerca del centro (hasta `pointerRadius`) sin ningún botón apretado, la roca toma parte de su velocidad (`pointerPush`, `pointerTilt`) y el mismo resorte la devuelve. Con un botón apretado no, porque eso es OrbitControls girando la cámara. La posición 3D del puntero sale de un rayo contra el plano que mira a la cámara por el origen. `Utils/Pointer.js` solo guarda la posición en NDC y el estado; la lógica está en `Rock.updatePointer()`, que deja en `rock.cursor` el rayo, la velocidad del puntero en mundo y `isMoving`.
+- **Puntero sobre los fragmentos pegados:** cada fragmento tiene su propio `Sway` (`item.sway`), que se suma al de la roca. `Fragments.updateSway()` lo empuja según lo cerca que pase el rayo del puntero de su centro (`pointerRadius`), con `pointerPush` y `pointerTilt` propios, y usa el mismo resorte que la roca. Como ya se mueven con la roca, ese extra es lo que hace que respondan más que ella (~45 % más con los valores actuales). También es solo visual: el cuerpo queda fijo donde se pegó, así que para la física nada cambia.
 - `Rock.update()` compone el pivot a mano (giro en Y → desplazamiento → inclinación) a partir de `rock.spin`; ya no se usa `pivot.rotation.y`.
 - **Orden del frame:** `Experience.update()` hace cámara → `physics.update()` (step) → `world.update()` → render. `Fragments` lee las poses del step recién hecho y deja aplicado el impulso para el siguiente.
 - Antes de `launch()` los cuerpos están deshabilitados y las instancias estacionadas en `y = 1000` (fuera del far plane), para que los pipelines se compilen durante el fade inicial.
@@ -79,14 +82,15 @@ Rapier en CPU. La primera versión seguía `19 — TSL - Sphere Particles Physic
 
 ## Rocas en órbita (`Orbiters.js`)
 
-No son cuerpos de Rapier: cada una sigue una elipse con la roca principal en un foco, así que no pueden caerse, chocar ni pegarse.
+Cada una tiene una órbita ideal (una elipse con la roca principal en un foco) y un cuerpo dinámico de Rapier con hull convexo que la recorre. Nada las atrae hacia la roca y nunca se pegan.
 
+- **Guiado por velocidad:** en cada frame se le pone al cuerpo la velocidad que lo lleva, en el próximo step, al siguiente punto de su órbita. Si al terminar el step no está donde se lo mandó, la diferencia es obra de un choque: se guarda en `item.offset` y se va perdiendo a razón de `recover` por segundo. Así se empujan entre ellas, contra la roca y contra los fragmentos, y vuelven solas a su carril. No usar `setTranslation` ni cuerpos cinemáticos: atravesarían todo.
+- **Dos espacios:** las órbitas están fijas en el mundo (no giran ni se sacuden con la roca), pero los cuerpos viven en el mundo físico, que es el espacio del pivot. `update()` convierte el punto de la órbita con `pivot.worldToLocal()` y dibuja la malla (hija de la escena) con la matriz del pivot del frame en que se dio la orden (`this.frame`). Por eso, cuando la roca se mueve por un golpe o por el puntero, para la física es la órbita la que se le viene encima, y la roca las aparta.
 - Se lanzan cuando `fragments.isSettled` (todas las rocas grandes pegadas) más `delay`.
-- Cada órbita deja libre la esfera `fragments.getReach()` (la roca y todo lo pegado) más `gap`, y se reparten en carriles dentro de `band` para no cruzarse a la misma distancia. Planos casi horizontales (`tilt`), todas en el sentido de giro de la roca.
+- Cada órbita deja libre la esfera `fragments.getReach()` (la roca y todo lo pegado) más `gap`, y se reparten en carriles dentro de `band`. Planos casi horizontales (`tilt`), todas en el sentido de giro de la roca.
 - Velocidad tipo Kepler: `speed` es la velocidad angular de una órbita circular de radio 1; las más abiertas van más lento.
 - **Acercamiento:** la misma elipse escalada (`approach`) que se encoge exponencialmente a su tamaño real (`approachTime`), lo que dibuja una espiral. Arrancan fuera de cuadro con `camera.getExitDistance()`, nunca desde delante de la cámara.
-- Viven en espacio de mundo (hijas de la escena, no del pivot): no giran ni se sacuden con la roca.
-- Si se relanzan las rocas grandes desde el panel con las pequeñas ya en órbita, pueden atravesarse: no hay colisión entre ellas.
+- El centro de masa del hull no coincide exactamente con el origen del cuerpo, así que al girar quedan a ~0.01 de su órbita ideal. No se nota.
 - `#debug` → carpeta `orbiters`. Los controles marcados "(next launch)" solo se aplican al volver a lanzar.
 
 ## Sombras
@@ -128,4 +132,4 @@ Producto en estudio oscuro, nocturno, minimalista. La roca protagonista, centrad
 
 Los valores finales los ajustó el usuario en el panel `#debug` y ya están como defaults en el código: cámara (`Camera.js` → `framing`), fondo (`Background.js` → `parameters`), exposure (`Renderer.js`), bloom (`PostProcessing.js` → `parameters`), luces y env map (`Environment.js`). **No cambiarlos sin pedirlo.** Si un cambio los afecta, avisar.
 
-Los valores de `Fragments.js` (`parameters`), la rim light (incluida su sombra) y la intensidad del env map también los ajustó el usuario en el panel. Las órbitas (`Orbiters.js` → `parameters`) también las ajustó él. Los de la reacción al golpe (`Rock.js` → `parameters`), `hitSpeed` y la sombra de la key light son un primer ajuste hecho sin verlo en tiempo real: todavía no los validó. El encuadre de la cámara solo tiene en cuenta la roca principal: con muchas rocas el conjunto puede salirse del cuadro.
+Los valores de `Fragments.js` (`parameters`), la rim light (incluida su sombra) y la intensidad del env map también los ajustó el usuario en el panel. Las órbitas (`Orbiters.js` → `parameters`, salvo `recover`) también las ajustó él. Los de la reacción al golpe y al puntero (`Rock.js` → `parameters`, y `pointerPush` / `pointerTilt` / `pointerRadius` de `Fragments.js`), `hitSpeed`, `recover` y la sombra de la key light son un primer ajuste hecho sin verlo en tiempo real: todavía no los validó. El encuadre de la cámara solo tiene en cuenta la roca principal: con muchas rocas el conjunto puede salirse del cuadro.

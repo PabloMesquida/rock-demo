@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu'
 
 import Debug from './Utils/Debug.js'
 import Sizes from './Utils/Sizes.js'
+import Pointer from './Utils/Pointer.js'
 import Time from './Utils/Time.js'
 import Resources from './Utils/Resources.js'
 import Camera from './Camera.js'
@@ -36,6 +37,7 @@ export default class Experience
         // Setup
         this.debug = new Debug()
         this.sizes = new Sizes()
+        this.pointer = new Pointer(this.canvas)
         this.time = new Time()
         this.scene = new THREE.Scene()
         this.resources = new Resources(sources)
@@ -109,6 +111,7 @@ export default class Experience
         this.isDestroyed = true
 
         this.sizes.destroy()
+        this.pointer.destroy()
         this.time.destroy()
 
         if(this.world)

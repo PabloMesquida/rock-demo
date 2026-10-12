@@ -1,4 +1,5 @@
 import * as THREE from 'three/webgpu'
+import RAPIER from '@dimforge/rapier3d-compat'
 import Experience from '../Experience.js'
 
 /**
@@ -9,7 +10,8 @@ import Experience from '../Experience.js'
  * rock. Instances start parked far above (beyond the camera far plane) until
  * their owner places them with mesh.setMatrixAt().
  *
- * Used by Fragments.js and Orbiters.js, which decide how the instances move.
+ * Used by Fragments.js and Orbiters.js, which decide how the instances move
+ * and create one rigid body per instance with createColliderDesc().
  */
 export default class RockInstances
 {
@@ -54,6 +56,23 @@ export default class RockInstances
         this.geometry.computeBoundingSphere()
 
         this.radius = this.geometry.boundingSphere.radius
+    }
+
+    /**
+     * Collider with the shape of the model: the convex hull of its vertices.
+     * The same description can be used for every instance.
+     */
+    createColliderDesc()
+    {
+        const position = this.geometry.attributes.position
+        const points = new Float32Array(position.count * 3)
+        const vertex = new THREE.Vector3()
+
+        for(let i = 0; i < position.count; i++)
+            vertex.fromBufferAttribute(position, i).toArray(points, i * 3)
+
+        // convexHull() returns null if the points are degenerate
+        return RAPIER.ColliderDesc.convexHull(points) ?? RAPIER.ColliderDesc.ball(this.radius)
     }
 
     setMaterial()

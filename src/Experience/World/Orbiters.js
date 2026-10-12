@@ -1,24 +1,32 @@
 import * as THREE from 'three/webgpu'
+import RAPIER from '@dimforge/rapier3d-compat'
 import Experience from '../Experience.js'
 import RockInstances from './RockInstances.js'
 
 const _position = new THREE.Vector3()
+const _velocity = new THREE.Vector3()
 const _scale = new THREE.Vector3()
-const _matrix = new THREE.Matrix4()
 const _quaternion = new THREE.Quaternion()
+const _matrix = new THREE.Matrix4()
 
 /**
- * Small rocks that come close to the main rock and stay orbiting around it,
- * without ever touching it.
+ * Small rocks that come close to the main rock and stay orbiting around it.
  *
- * They are not physics bodies: each one follows an ellipse with the main rock
- * at one focus, so the orbits can't decay, collide or get stuck. The approach
- * is the same ellipse scaled up, shrinking to its real size while the rock
- * moves along it, which draws a spiral from outside the screen.
+ * Each one has an ideal orbit: an ellipse with the main rock at one focus. The
+ * approach is the same ellipse scaled up, shrinking to its real size while the
+ * rock moves along it, which draws a spiral from outside the screen.
+ *
+ * They are Rapier bodies with a convex hull, driven along that orbit by their
+ * velocity. When something gets in the way (another orbiter, the main rock, a
+ * fragment) the collision pushes them off it, and they drift back. Nothing
+ * pulls them towards the rock and they never stick.
+ *
+ * The orbits are fixed in world space (they neither spin nor sway with the
+ * rock), but the bodies live in the physics world, which is the space of the
+ * rock pivot. update() converts between both on every frame.
  *
  * They are launched once every fragment is stuck, and the orbits leave a gap
- * around the rock plus whatever got stuck to it. They live in world space, not
- * in the rock pivot: they neither spin nor sway with the rock.
+ * around the rock plus whatever got stuck to it.
  *
  * Receives the fragments by parameter because World is still being built when
  * this is created (experience.world may not exist yet).
@@ -31,9 +39,11 @@ export default class Orbiters
         this.scene = this.experience.scene
         this.time = this.experience.time
         this.camera = this.experience.camera
+        this.physics = this.experience.physics
         this.debug = this.experience.debug
 
         this.fragments = fragments
+        this.pivot = fragments.rock.pivot
 
         this.parameters = {
             delay: 0.5,         // Seconds between the last fragment getting stuck and the launch
@@ -46,7 +56,8 @@ export default class Orbiters
             spawnMargin: 2,     // How far beyond the edge of the screen they start
             spawnMax: 12,       // Furthest start, for the ones that can't start off screen
             appearTime: 1,      // Seconds they take to grow to full size
-            spin: 1.5           // Maximum tumbling speed (rad/s)
+            spin: 1.5,          // Maximum tumbling speed at launch (rad/s)
+            recover: 1.5        // How fast they go back to their orbit after being pushed off it (per second)
         }
 
         // One entry per model; "count" instances of each
@@ -60,23 +71,41 @@ export default class Orbiters
         this.isLaunched = false
         this.wait = 0
 
+        // Pivot space of the frame in which the bodies were last driven
+        this.frame = new THREE.Matrix4()
+
         this.setItems()
         this.setDebug()
     }
 
+    /**
+     * One instance and one rigid body per rock, disabled until launch().
+     */
     setItems()
     {
+        const world = this.physics.instance
+
         this.items = []
 
         for(const type of this.types)
         {
+            // Meshes in world space: update() places them from the bodies
             type.instances = new RockInstances(type.resource, type.count, this.scene)
+
+            const colliderDesc = type.instances.createColliderDesc()
 
             for(let index = 0; index < type.count; index++)
             {
+                const body = world.createRigidBody(
+                    RAPIER.RigidBodyDesc.dynamic().setTranslation(0, 1000, 0).setEnabled(false)
+                )
+
+                world.createCollider(colliderDesc, body)
+
                 this.items.push({
                     type,
                     index,
+                    body,
                     semiMajorAxis: 1,
                     eccentricity: 0,
                     periapsis: new THREE.Vector3(), // Direction of the closest point of the orbit
@@ -84,9 +113,8 @@ export default class Orbiters
                     angle: 0,                       // Position along the orbit, from the periapsis
                     approach: 1,                    // Size of the ellipse at launch, relative to the real one
                     age: 0,
-                    quaternion: new THREE.Quaternion(),
-                    spinAxis: new THREE.Vector3(),
-                    spinSpeed: 0
+                    target: new THREE.Vector3(),    // Point of the orbit it was last sent to, in pivot space
+                    offset: new THREE.Vector3()     // How far collisions have pushed it from the orbit
                 })
             }
         }
@@ -102,6 +130,8 @@ export default class Orbiters
         const { gap, band, eccentricity, tilt, spawnMargin, spawnMax, spin } = this.parameters
 
         camera.updateMatrixWorld()
+        this.pivot.updateMatrixWorld()
+        this.frame.copy(this.pivot.matrixWorld)
 
         const toCamera = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 2)
         const reach = this.fragments.getReach()
@@ -110,7 +140,7 @@ export default class Orbiters
 
         this.items.forEach((item, i) =>
         {
-            // Each one in its own lane, so they never cross at the same distance
+            // Each one in its own lane
             const closest = reach + gap + item.type.instances.radius + band * ((i + Math.random()) / this.items.length)
 
             item.eccentricity = Math.random() * eccentricity
@@ -140,10 +170,16 @@ export default class Orbiters
 
             item.approach = Math.max(1, start / this.getDistance(item))
             item.age = 0
+            item.offset.set(0, 0, 0)
 
-            item.quaternion.random()
-            item.spinAxis.randomDirection()
-            item.spinSpeed = spin * (0.4 + Math.random() * 0.6)
+            // Body at the start of the spiral, tumbling
+            this.pivot.worldToLocal(this.getOrbitPosition(item, item.target))
+
+            item.body.setEnabled(true)
+            item.body.setTranslation(item.target, true)
+            item.body.setRotation(_quaternion.random(), true)
+            item.body.setLinvel({ x: 0, y: 0, z: 0 }, true)
+            item.body.setAngvel(direction.randomDirection().multiplyScalar(spin * (0.4 + Math.random() * 0.6)), true)
         })
 
         this.isLaunched = true
@@ -157,6 +193,26 @@ export default class Orbiters
         return item.semiMajorAxis * (1 - item.eccentricity ** 2) / (1 + item.eccentricity * Math.cos(item.angle))
     }
 
+    /**
+     * How much bigger than the real orbit the ellipse still is: starts at
+     * item.approach and shrinks to 1.
+     */
+    getSize(item)
+    {
+        return 1 + (item.approach - 1) * Math.exp(- item.age / this.parameters.approachTime)
+    }
+
+    /**
+     * Point of the orbit where the rock should be now, in world space.
+     */
+    getOrbitPosition(item, target)
+    {
+        return target
+            .copy(item.periapsis).multiplyScalar(Math.cos(item.angle))
+            .addScaledVector(item.sideways, Math.sin(item.angle))
+            .multiplyScalar(this.getDistance(item) * this.getSize(item))
+    }
+
     setDebug()
     {
         if(!this.debug.active)
@@ -165,6 +221,7 @@ export default class Orbiters
         const folder = this.debug.ui.addFolder('orbiters')
 
         folder.add(this.parameters, 'speed').min(0).max(5).step(0.01)
+        folder.add(this.parameters, 'recover').min(0).max(10).step(0.01)
         folder.add(this.parameters, 'approachTime').min(0.1).max(10).step(0.01).name('approach time')
         folder.add(this.parameters, 'appearTime').min(0).max(6).step(0.01).name('appear time')
         folder.add(this.parameters, 'gap').min(0).max(2).step(0.01).name('gap (next launch)')
@@ -177,6 +234,9 @@ export default class Orbiters
         folder.add(this, 'launch')
     }
 
+    /**
+     * Runs after the physics step of the frame (see Experience.update()).
+     */
     update()
     {
         const delta = this.time.delta
@@ -192,39 +252,51 @@ export default class Orbiters
             this.launch()
         }
 
-        const { speed, approachTime, appearTime } = this.parameters
+        const { speed, appearTime, recover } = this.parameters
+        const step = this.physics.instance.timestep
+        const keep = Math.exp(- recover * delta)
+
+        this.pivot.updateMatrixWorld()
 
         for(const item of this.items)
         {
             item.age += delta
 
-            // The ellipse, scaled up at first and shrinking to its real size
-            const size = 1 + (item.approach - 1) * Math.exp(- item.age / approachTime)
-            const shape = item.semiMajorAxis * (1 - item.eccentricity ** 2)
+            // Where the step left it. Anything other than where it was sent
+            // is the work of a collision
+            _position.copy(item.body.translation())
+            item.offset.copy(_position).sub(item.target)
 
-            // Kepler: the closer to the centre, the faster it turns
+            // Mesh in world space. The body was driven in the pivot space of
+            // the previous frame, so that is the one that takes it back
+            _scale.setScalar(THREE.MathUtils.smoothstep(item.age, 0, appearTime))
+            _matrix.compose(_position, _quaternion.copy(item.body.rotation()), _scale).premultiply(this.frame)
+
+            item.type.instances.mesh.setMatrixAt(item.index, _matrix)
+            item.type.instances.mesh.instanceMatrix.needsUpdate = true
+
+            // Advance along the orbit. Kepler: the closer to the centre, the
+            // faster it turns
+            const size = this.getSize(item)
+            const shape = item.semiMajorAxis * (1 - item.eccentricity ** 2)
             const distance = this.getDistance(item) * size
 
             item.angle += (speed * Math.sqrt(shape * size) / (distance * distance)) * delta
 
-            _position
-                .copy(item.periapsis).multiplyScalar(Math.cos(item.angle))
-                .addScaledVector(item.sideways, Math.sin(item.angle))
-                .multiplyScalar(this.getDistance(item) * size)
+            // Velocity that takes it, in the next step, to its new point of the
+            // orbit plus what is left of the push: that part fades away
+            this.pivot.worldToLocal(this.getOrbitPosition(item, item.target))
 
-            // Tumbling
-            item.quaternion.premultiply(_quaternion.setFromAxisAngle(item.spinAxis, item.spinSpeed * delta))
-
-            _scale.setScalar(THREE.MathUtils.smoothstep(item.age, 0, appearTime))
-            _matrix.compose(_position, item.quaternion, _scale)
-
-            item.type.instances.mesh.setMatrixAt(item.index, _matrix)
-            item.type.instances.mesh.instanceMatrix.needsUpdate = true
+            _velocity.copy(item.target).addScaledVector(item.offset, keep).sub(_position).divideScalar(step)
+            item.body.setLinvel(_velocity, true)
         }
+
+        this.frame.copy(this.pivot.matrixWorld)
     }
 
     destroy()
     {
+        // The bodies are freed with the physics world
         for(const type of this.types)
             type.instances.destroy()
     }

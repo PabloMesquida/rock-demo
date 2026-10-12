@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu'
 import RAPIER from '@dimforge/rapier3d-compat'
 import Experience from '../Experience.js'
 import RockInstances from './RockInstances.js'
+import Sway from './Sway.js'
 
 /**
  * Smaller rocks that fall on the main rock and stick to it.
@@ -11,7 +12,9 @@ import RockInstances from './RockInstances.js'
  * global gravity: on every frame each body is pulled towards the origin.
  *
  * A fragment that stays still while touching something static gets stuck: its
- * body becomes fixed, and the next ones can pile on top of it.
+ * body becomes fixed, and the next ones can pile on top of it. From then on
+ * the pointer can nudge it, a bit more than it nudges the main rock; that is
+ * only visual, the body stays where it got stuck.
  *
  * Everything lives in the space of the rock pivot (meshes are children of it,
  * and so is the physics world): stuck fragments spin with the rock for free.
@@ -44,7 +47,10 @@ export default class Fragments
             friction: 0.14,
             stickSpeed: 1,    // Below this speed (units/s) a resting fragment counts as still...
             stickTime: 2,     // ...and after this many seconds still, it gets stuck
-            hitSpeed: 0.3     // Speed lost in one frame (units/s) for a contact to count as a hit on the rock
+            hitSpeed: 0.3,    // Speed lost in one frame (units/s) for a contact to count as a hit on the rock
+            pointerPush: 0.7,   // How much of the pointer's speed a stuck fragment picks up, on top of what the rock moves
+            pointerTilt: 8,     // Same for the tipping
+            pointerRadius: 0.45 // How far from the centre of a fragment the pointer still reaches it
         }
 
         // One entry per model; "count" instances of each
@@ -69,6 +75,11 @@ export default class Fragments
         this.matrix = new THREE.Matrix4()
         this.swayMatrix = new THREE.Matrix4()
         this.impulse = new THREE.Vector3()
+        this.centre = new THREE.Vector3()
+        this.lever = new THREE.Vector3()
+        this.pointerVelocity = new THREE.Vector3()
+        this.toPivot = new THREE.Quaternion()
+        this.swayQuaternion = new THREE.Quaternion()
 
         this.setTypes()
         this.setBodies()
@@ -77,23 +88,14 @@ export default class Fragments
     }
 
     /**
-     * Instanced mesh and hull points of each model.
+     * Instanced mesh of each model, in the space of the rock pivot.
      */
     setTypes()
     {
-        const vertex = new THREE.Vector3()
-
         for(const type of this.types)
         {
             type.instances = new RockInstances(type.resource, type.count, this.rock.pivot)
             type.radius = type.instances.radius
-
-            // Rapier builds the convex hull from these points
-            const position = type.instances.geometry.attributes.position
-            type.points = new Float32Array(position.count * 3)
-
-            for(let i = 0; i < position.count; i++)
-                vertex.fromBufferAttribute(position, i).toArray(type.points, i * 3)
         }
     }
 
@@ -108,8 +110,7 @@ export default class Fragments
 
         for(const type of this.types)
         {
-            // convexHull() returns null if the points are degenerate
-            const colliderDesc = RAPIER.ColliderDesc.convexHull(type.points) ?? RAPIER.ColliderDesc.ball(type.radius)
+            const colliderDesc = type.instances.createColliderDesc()
 
             for(let index = 0; index < type.count; index++)
             {
@@ -118,7 +119,7 @@ export default class Fragments
                 )
                 const collider = world.createCollider(colliderDesc, body)
 
-                this.items.push({ type, index, body, collider, isStuck: true, stillTime: 0, age: 0, velocity: new THREE.Vector3() })
+                this.items.push({ type, index, body, collider, isStuck: true, stillTime: 0, age: 0, velocity: new THREE.Vector3(), sway: new Sway() })
             }
         }
     }
@@ -213,6 +214,7 @@ export default class Fragments
             item.stillTime = 0
             item.age = 0
             item.velocity.set(0, 0, 0)
+            item.sway.reset()
         })
 
         this.isLaunched = true
@@ -263,6 +265,41 @@ export default class Fragments
         return isTouching
     }
 
+    /**
+     * Lets the pointer nudge a stuck fragment and brings it back. Expects
+     * this.position / this.quaternion to hold its pose, and displaces them.
+     */
+    updateSway(item, delta)
+    {
+        const cursor = this.rock.cursor
+
+        if(cursor.isMoving)
+        {
+            // How close the pointer passes to the fragment, on screen
+            const ray = cursor.raycaster.ray
+            const reach = this.parameters.pointerRadius
+
+            this.centre.copy(this.position).applyMatrix4(this.rock.pivot.matrixWorld)
+
+            const influence = 1 - THREE.MathUtils.smoothstep(ray.distanceToPoint(this.centre), reach * 0.4, reach)
+
+            if(influence > 0)
+            {
+                // Where it is pushed (relative to its centre) and how, in pivot space
+                ray.closestPointToPoint(this.centre, this.lever).sub(this.centre).applyQuaternion(this.toPivot)
+                this.pointerVelocity.copy(cursor.velocity).applyQuaternion(this.toPivot)
+
+                item.sway.push(this.lever, this.pointerVelocity, this.parameters.pointerPush * influence * delta, this.parameters.pointerTilt * influence * delta)
+            }
+        }
+
+        // Same spring as the main rock
+        item.sway.update(delta, this.rock.parameters.recoverFrequency, this.rock.parameters.recoverDamping)
+
+        this.position.add(item.sway.offset)
+        this.quaternion.premultiply(item.sway.getQuaternion(this.swayQuaternion))
+    }
+
     setDebug()
     {
         if(!this.debug.active)
@@ -282,6 +319,9 @@ export default class Fragments
         folder.add(this.parameters, 'spawnMax').min(2).max(30).step(0.1).name('spawn max')
         folder.add(this.parameters, 'appearTime').min(0).max(6).step(0.01).name('appear time')
         folder.add(this.parameters, 'spin').min(0).max(6).step(0.01)
+        folder.add(this.parameters, 'pointerPush').min(0).max(6).step(0.01).name('pointer push')
+        folder.add(this.parameters, 'pointerTilt').min(0).max(30).step(0.1).name('pointer tilt')
+        folder.add(this.parameters, 'pointerRadius').min(0.1).max(2).step(0.01).name('pointer radius')
         folder.add(this, 'launch')
 
         // Wireframe of every collider, as Rapier sees them
@@ -319,31 +359,42 @@ export default class Fragments
      */
     update()
     {
+        if(this.helper?.visible)
+            this.updateHelper()
+
         if(!this.isLaunched && this.time.elapsed >= this.parameters.delay)
             this.launch()
 
+        // Nothing to move while they are parked
+        if(!this.isLaunched)
+            return
+
         const delta = this.physics.instance.timestep
+
+        // Rock.update() has just moved the pivot
+        this.rock.pivot.updateMatrixWorld()
+        this.toPivot.copy(this.rock.pivot.quaternion).invert()
 
         for(const item of this.items)
         {
-            // A stuck fragment only needs updates until it is fully grown
-            if(item.isStuck && item.age >= this.parameters.appearTime)
-                continue
-
             // Mesh, growing from nothing right after the launch
             item.age += delta
 
             this.position.copy(item.body.translation())
             this.quaternion.copy(item.body.rotation())
             this.scale.setScalar(THREE.MathUtils.smoothstep(item.age, 0, this.parameters.appearTime))
+
+            if(item.isStuck)
+                this.updateSway(item, delta)
+
             this.matrix.compose(this.position, this.quaternion, this.scale)
 
             // The meshes are children of the pivot, which sways when the rock
             // is hit: undo that for the ones that are still far from it
-            const independence = THREE.MathUtils.smoothstep(this.position.length(), 1.5, 3.5)
+            const independence = item.isStuck ? 0 : THREE.MathUtils.smoothstep(this.position.length(), 1.5, 3.5)
 
             if(independence > 0)
-                this.matrix.premultiply(this.rock.getSwayMatrix(independence, this.swayMatrix).invert())
+                this.matrix.premultiply(this.rock.sway.getMatrix(this.swayMatrix, independence).invert())
 
             item.type.instances.mesh.setMatrixAt(item.index, this.matrix)
             item.type.instances.mesh.instanceMatrix.needsUpdate = true
@@ -395,10 +446,7 @@ export default class Fragments
             }, true)
         }
 
-        this.isSettled = this.isLaunched && this.items.every((item) => item.isStuck)
-
-        if(this.helper?.visible)
-            this.updateHelper()
+        this.isSettled = this.items.every((item) => item.isStuck)
     }
 
     destroy()
