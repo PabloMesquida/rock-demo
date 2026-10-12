@@ -31,6 +31,7 @@ export default class Fragments
         this.camera = this.experience.camera
         this.physics = this.experience.physics
         this.debug = this.experience.debug
+        this.panel = this.experience.panel
 
         this.rock = rock
 
@@ -85,6 +86,7 @@ export default class Fragments
         this.setBodies()
         this.setSurface()
         this.setDebug()
+        this.setPanel()
     }
 
     /**
@@ -352,6 +354,25 @@ export default class Fragments
             this.helper.geometry = new THREE.BufferGeometry()
             this.helper.geometry.setAttribute('position', new THREE.BufferAttribute(vertices.slice(), 3))
         }
+    }
+
+    /**
+     * What the visitor can play with. Gravity, damping and grip are read on
+     * every frame, so they only show on the next launch.
+     */
+    setPanel()
+    {
+        if(!this.panel.active)
+            return
+
+        const folder = this.panel.ui.addFolder('Rocks')
+        const setSurface = () => this.setSurface()
+
+        folder.add(this.parameters, 'gravity').min(0.5).max(10).step(0.01).name('Gravity')
+        folder.add(this.parameters, 'damping').min(0).max(3).step(0.01).name('Damping')
+        folder.add(this.parameters, 'grip').min(0.5).max(15).step(0.1).name('Grip')
+        folder.add(this.parameters, 'bounce').min(0).max(0.9).step(0.01).name('Bounce').onChange(setSurface)
+        folder.add(this.parameters, 'friction').min(0).max(1.5).step(0.01).name('Friction').onChange(setSurface)
     }
 
     /**

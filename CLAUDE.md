@@ -7,7 +7,7 @@ Respondé en español.
 ## Comandos
 
 ```bash
-npm run dev      # Vite en http://localhost:5173  (#debug para el panel lil-gui)
+npm run dev      # Vite en http://localhost:5173  (#debug cambia el panel del visitante por el de desarrollo)
 npm run build    # build de producción en dist/
 npm run preview  # sirve dist/
 ```
@@ -26,7 +26,9 @@ No hay tests ni linter. Validar = `npm run build` sin errores + abrir el dev ser
 Sigue `../Referencias/26 — Code structuring for bigger projects.pdf` (Bruno Simon / Three.js Journey):
 
 ```
-src/main.js                         entrada: importa style.css e instancia Experience
+index.html                          canvas + título "Rock Demo" y link al repo (.intro); enlaza style.css
+src/style.css                       canvas, .intro y el tema del panel del visitante (.lil-gui.panel)
+src/main.js                         entrada: instancia Experience
 src/Experience/Experience.js        singleton; crea todo y propaga resize → update → destroy
 src/Experience/sources.js           lista de assets { name, type, path }
 src/Experience/Camera.js            PerspectiveCamera + OrbitControls + encuadre automático (frame())
@@ -34,8 +36,8 @@ src/Experience/Renderer.js          WebGPURenderer (antialias false) + tone mapp
 src/Experience/Physics.js           mundo de Rapier sin gravedad global; init() async y un step por frame
 src/Experience/PostProcessing.js    THREE.RenderPipeline: scene pass → bloom → renderOutput → fondo → FXAA → dither
 src/Experience/Background.js        gradiente radial como nodo TSL (uniforms), en espacio de display sRGB
-src/Experience/Utils/               EventEmitter, Sizes, Time, Resources, Debug, Pointer
-src/Experience/World/World.js       espera a Resources; crea Rock, Environment y Fragments; update() de lo que vive en escena
+src/Experience/Utils/               EventEmitter, Sizes, Time, Resources, Debug, Panel, Pointer
+src/Experience/World/World.js       espera a Resources; crea Rock, Environment, Fragments y Orbiters; update() de lo que vive en escena; launch() repite la secuencia
 src/Experience/World/Rock.js        modelo, anisotropy, pivot de rotación, dimensiones para el encuadre, collider trimesh, reacción a golpes y al puntero
 src/Experience/World/Sway.js        desplazamiento que vuelve solo: posición + inclinación con resorte amortiguado
 src/Experience/World/RockInstances.js un modelo de roca como InstancedMesh (geometría centrada, material del GLB, sombras) y su hull para Rapier
@@ -50,6 +52,8 @@ Convenciones (las del PDF, respetarlas):
 - Métodos `setX()` en el constructor (`setInstance`, `setModel`, `setDebug`…). Además `resize()`, `update()` y `destroy()` cuando hacen falta, llamados desde el padre (nunca escuchar `window` directamente salvo en `Sizes`; el puntero se lee de `experience.pointer`, que escucha el canvas).
 - Eventos con `EventEmitter`: `sizes 'resize'`, `time 'tick'`, `resources 'ready'` (más `'progress'` y `'error'`). Para no perder un `'ready'` que ya ocurrió, usar `resources.whenReady(cb)`. Si un asset falla, `'ready'` no llega nunca y el canvas queda invisible: mirar la consola.
 - `Time` mide en **segundos** (el PDF usa ms). Toda animación usa `this.time.delta`. El delta está limitado a 0.1 s.
+- Panel del visitante (`Utils/Panel.js`): siempre visible salvo con `#debug` (dos paneles sobre los mismos valores no se sincronizan). Funciona igual que el de debug: cada clase suma sus controles en `setPanel()`, dentro de `if(this.panel.active)`. Hoy: `Fragments` (Gravity, Damping, Grip, Bounce, Friction), `Orbiters` (Speed, Gap, Band) y `World` (botón Launch). Es lil-gui con tema propio en `style.css`; como lil-gui declara sus variables CSS en cada `.lil-gui`, carpetas incluidas, el tema se aplica a `.lil-gui.panel` y a `.lil-gui.panel .lil-gui`. Arranca plegado por debajo de 720 px de ancho.
+- `style.css` se enlaza con `<link>` en `index.html`, no se importa desde JS: importado, en `npm run dev` los estilos llegan después del primer pintado y el HTML se ve un instante sin estilo (el ícono SVG llegó a ocupar toda la pantalla).
 - Debug: solo con `#debug` en la URL. Cada clase crea su carpeta (`this.debug.ui.addFolder(...)`) dentro de `if(this.debug.active)`. `window.experience` solo existe en modo debug.
 - No fragmentar en archivos pequeños sin valor ni meter abstracciones especulativas.
 
@@ -86,12 +90,13 @@ Cada una tiene una órbita ideal (una elipse con la roca principal en un foco) y
 
 - **Guiado por velocidad:** en cada frame se le pone al cuerpo la velocidad que lo lleva, en el próximo step, al siguiente punto de su órbita. Si al terminar el step no está donde se lo mandó, la diferencia es obra de un choque: se guarda en `item.offset` y se va perdiendo a razón de `recover` por segundo. Así se empujan entre ellas, contra la roca y contra los fragmentos, y vuelven solas a su carril. No usar `setTranslation` ni cuerpos cinemáticos: atravesarían todo.
 - **Dos espacios:** las órbitas están fijas en el mundo (no giran ni se sacuden con la roca), pero los cuerpos viven en el mundo físico, que es el espacio del pivot. `update()` convierte el punto de la órbita con `pivot.worldToLocal()` y dibuja la malla (hija de la escena) con la matriz del pivot del frame en que se dio la orden (`this.frame`). Por eso, cuando la roca se mueve por un golpe o por el puntero, para la física es la órbita la que se le viene encima, y la roca las aparta.
-- Se lanzan cuando `fragments.isSettled` (todas las rocas grandes pegadas) más `delay`.
+- Se lanzan cuando `fragments.isSettled` (todas las rocas grandes pegadas) más `delay`. `reset()` las retira hasta que eso vuelva a pasar; lo usa `World.launch()` (el botón Launch del visitante), que relanza los fragmentos.
+- `gap` y `band` actúan en vivo: `setLanes()` recalcula el tamaño de cada órbita y las rocas derivan a su nuevo carril como después de un choque.
 - Cada órbita deja libre la esfera `fragments.getReach()` (la roca y todo lo pegado) más `gap`, y se reparten en carriles dentro de `band`. Planos casi horizontales (`tilt`), todas en el sentido de giro de la roca.
 - Velocidad tipo Kepler: `speed` es la velocidad angular de una órbita circular de radio 1; las más abiertas van más lento.
 - **Acercamiento:** la misma elipse escalada (`approach`) que se encoge exponencialmente a su tamaño real (`approachTime`), lo que dibuja una espiral. Arrancan fuera de cuadro con `camera.getExitDistance()`, nunca desde delante de la cámara.
 - El centro de masa del hull no coincide exactamente con el origen del cuerpo, así que al girar quedan a ~0.01 de su órbita ideal. No se nota.
-- `#debug` → carpeta `orbiters`. Los controles marcados "(next launch)" solo se aplican al volver a lanzar.
+- `#debug` → carpeta `orbiters`. Los controles marcados "(next launch)" solo se aplican al volver a lanzar; en el panel del visitante, Gravity, Damping y Grip también se notan recién en el siguiente Launch, porque las rocas ya están pegadas.
 
 ## Sombras
 

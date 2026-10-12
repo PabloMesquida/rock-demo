@@ -28,3 +28,151 @@ body
 {
     opacity: 1;
 }
+
+/**
+ * Title and link, over the canvas
+ */
+.intro
+{
+    position: fixed;
+    top: 22px;
+    left: 26px;
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    color: #e9edf3;
+    pointer-events: none; /* The canvas keeps the pointer; only the link takes it */
+    user-select: none;
+}
+
+.intro h1
+{
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+.intro a
+{
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 8px;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: #8f98a8;
+    text-decoration: none;
+    pointer-events: auto;
+    transition: color 0.2s ease;
+}
+
+.intro a:hover,
+.intro a:focus-visible
+{
+    color: #e9edf3;
+}
+
+.intro svg
+{
+    width: 16px;
+    height: 16px;
+}
+
+/**
+ * Visitor panel (Utils/Panel.js): lil-gui with its own theme.
+ * lil-gui sets its variables on every .lil-gui element, folders included, so
+ * the theme has to reach them too.
+ */
+.lil-gui.panel,
+.lil-gui.panel .lil-gui
+{
+    --background-color: rgba(16, 18, 24, 0.66);
+    --title-background-color: transparent;
+    --title-text-color: #e9edf3;
+    --text-color: #b4bcc9;
+    --widget-color: rgba(255, 255, 255, 0.07);
+    --hover-color: rgba(255, 255, 255, 0.12);
+    --focus-color: rgba(255, 255, 255, 0.16);
+    --number-color: #a9bbd9;
+    --font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --font-size: 12px;
+    --input-font-size: 12px;
+    --widget-height: 24px;
+    --widget-border-radius: 6px;
+    --spacing: 8px;
+    --padding: 10px;
+    --name-width: 34%;
+    --slider-knob-width: 3px;
+    --folder-indent: 0px;
+}
+
+.lil-gui.panel .lil-gui
+{
+    --background-color: transparent;
+}
+
+.lil-gui.panel
+{
+    top: 16px;
+    right: 16px;
+    max-height: calc(100% - 32px);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 14px;
+    backdrop-filter: blur(14px) saturate(120%);
+    -webkit-backdrop-filter: blur(14px) saturate(120%);
+}
+
+.lil-gui.panel.root > .title
+{
+    font-weight: 600;
+    letter-spacing: 0.06em;
+}
+
+/* Section names */
+.lil-gui.panel .lil-gui > .title
+{
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #7c8594;
+}
+
+/* Sliders show how full they are, not just a knob */
+.lil-gui.panel .controller.number .fill
+{
+    background: rgba(169, 187, 217, 0.2);
+}
+
+.lil-gui.panel .controller.launch
+{
+    margin-top: 6px;
+}
+
+.lil-gui.panel .controller.launch button
+{
+    height: 34px;
+    border: 0;
+    background: #a9bbd9;
+    color: #0e1015;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    transition: background 0.2s ease;
+}
+
+.lil-gui.panel .controller.launch button:hover,
+.lil-gui.panel .controller.launch button:focus-visible
+{
+    background: #c6d3e8;
+}
+
+/* Bigger targets for fingers */
+@media (pointer: coarse)
+{
+    .lil-gui.panel,
+    .lil-gui.panel .lil-gui
+    {
+        --font-size: 14px;
+        --input-font-size: 16px;
+        --widget-height: 32px;
+    }
+}

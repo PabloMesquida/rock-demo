@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu'
 
 import Debug from './Utils/Debug.js'
+import Panel from './Utils/Panel.js'
 import Sizes from './Utils/Sizes.js'
 import Pointer from './Utils/Pointer.js'
 import Time from './Utils/Time.js'
@@ -36,6 +37,7 @@ export default class Experience
 
         // Setup
         this.debug = new Debug()
+        this.panel = new Panel(!this.debug.active) // The visitor's panel, unless the debug one is there
         this.sizes = new Sizes()
         this.pointer = new Pointer(this.canvas)
         this.time = new Time()
@@ -122,6 +124,7 @@ export default class Experience
         this.camera.destroy()
         this.renderer.destroy()
         this.debug.destroy()
+        this.panel.destroy()
 
         if(window.experience === this)
             delete window.experience

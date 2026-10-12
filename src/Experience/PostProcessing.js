@@ -29,9 +29,9 @@ export default class PostProcessing
         this.renderer = renderer
 
         this.parameters = {
-            bloomStrength: 0.3,
+            bloomStrength: 0.6,
             bloomRadius: 0.02,
-            bloomThreshold: 0.015 // Scene luminance: median ≈ 0.02, max ≈ 0.2 (linear, pre tone mapping)
+            bloomThreshold: 0.02 // Scene luminance: median ≈ 0.02, max ≈ 0.2 (linear, pre tone mapping)
         }
 
         this.setInstance()

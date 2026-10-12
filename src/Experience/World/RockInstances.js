@@ -2,13 +2,15 @@ import * as THREE from 'three/webgpu'
 import RAPIER from '@dimforge/rapier3d-compat'
 import Experience from '../Experience.js'
 
+const _parked = new THREE.Matrix4().makeTranslation(0, 1000, 0)
+
 /**
  * Every instance of one rock model, drawn as a single InstancedMesh.
  *
  * The geometry is centred on the origin so each instance turns around its own
  * centre, and the material is the one exported from Blender, like the main
  * rock. Instances start parked far above (beyond the camera far plane) until
- * their owner places them with mesh.setMatrixAt().
+ * their owner places them with mesh.setMatrixAt(); park() sends one back.
  *
  * Used by Fragments.js and Orbiters.js, which decide how the instances move
  * and create one rigid body per instance with createColliderDesc().
@@ -91,8 +93,6 @@ export default class RockInstances
 
     setMesh()
     {
-        const parked = new THREE.Matrix4().makeTranslation(0, 1000, 0)
-
         this.mesh = new THREE.InstancedMesh(this.geometry, this.material, this.count)
         this.mesh.name = this.resource
         this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
@@ -101,9 +101,18 @@ export default class RockInstances
         this.mesh.receiveShadow = true
 
         for(let i = 0; i < this.count; i++)
-            this.mesh.setMatrixAt(i, parked)
+            this.park(i)
 
         this.parent.add(this.mesh)
+    }
+
+    /**
+     * Hides an instance: far above, where the camera doesn't reach.
+     */
+    park(index)
+    {
+        this.mesh.setMatrixAt(index, _parked)
+        this.mesh.instanceMatrix.needsUpdate = true
     }
 
     destroy()

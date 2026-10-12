@@ -21,6 +21,7 @@ export default class World
         this.resources = this.experience.resources
         this.camera = this.experience.camera
         this.renderer = this.experience.renderer
+        this.panel = this.experience.panel
 
         this.resources.whenReady(() =>
         {
@@ -36,12 +37,35 @@ export default class World
         this.fragments = new Fragments(this.rock)
         this.orbiters = new Orbiters(this.fragments)
 
+        this.setPanel()
+
         this.camera.frame(this.rock.dimensions)
 
         // Compile the pipelines before showing the canvas to avoid a first-frame hitch
         await this.renderer.instance.compileAsync(this.scene, this.camera.instance)
 
         this.experience.canvas.classList.add('is-ready')
+    }
+
+    /**
+     * Last in the visitor's panel, after the controls each class added.
+     */
+    setPanel()
+    {
+        if(!this.panel.active)
+            return
+
+        this.panel.ui.add(this, 'launch').name('Launch').domElement.classList.add('launch')
+    }
+
+    /**
+     * Plays the whole sequence again: the fragments fall, and the orbiters
+     * leave to come back once they have settled.
+     */
+    launch()
+    {
+        this.fragments.launch()
+        this.orbiters.reset()
     }
 
     update()

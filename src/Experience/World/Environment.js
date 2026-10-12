@@ -30,7 +30,7 @@ export default class Environment
 
     setKeyLight()
     {
-        this.keyLight = new THREE.DirectionalLight('#dfe5ee', 2.278)
+        this.keyLight = new THREE.DirectionalLight('#dfe5ee', 2.3)
         this.keyLight.position.set(- 2.6, 1.9, 1.074)
         this.setShadow(this.keyLight, 0.02, 2)
         this.scene.add(this.keyLight)
@@ -38,7 +38,7 @@ export default class Environment
 
     setRimLight()
     {
-        this.rimLight = new THREE.DirectionalLight('#58606f', 1)
+        this.rimLight = new THREE.DirectionalLight('#58606f', 1.2)
         this.rimLight.position.set(2.4, 0, - 2.8)
         this.setShadow(this.rimLight, 0.034, 5)
         this.scene.add(this.rimLight)
@@ -67,7 +67,7 @@ export default class Environment
     setEnvironmentMap()
     {
         this.environmentMap = {}
-        this.environmentMap.intensity = 0.5
+        this.environmentMap.intensity = 0.6
 
         const studio = createNightStudio()
         const pmremGenerator = new THREE.PMREMGenerator(this.renderer.instance)
