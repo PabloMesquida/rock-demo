@@ -52,5 +52,25 @@ export default [
         name: 'rock08Model',
         type: 'gltfModel',
         path: 'models/rock_08/rockDemo_08.glb'
+    },
+    {
+        name: 'rock_s_01Model',
+        type: 'gltfModel',
+        path: 'models/rock_s_01/rockDemo_s_01.glb'
+    },
+    {
+        name: 'rock_s_02Model',
+        type: 'gltfModel',
+        path: 'models/rock_s_02/rockDemo_s_02.glb'
+    },
+    {
+        name: 'rock_s_03Model',
+        type: 'gltfModel',
+        path: 'models/rock_s_03/rockDemo_s_03.glb'
+    },
+    {
+        name: 'rock_s_04Model',
+        type: 'gltfModel',
+        path: 'models/rock_s_04/rockDemo_s_04.glb'
     }
 ]

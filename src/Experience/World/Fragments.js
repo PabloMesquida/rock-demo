@@ -1,6 +1,7 @@
 import * as THREE from 'three/webgpu'
 import RAPIER from '@dimforge/rapier3d-compat'
 import Experience from '../Experience.js'
+import RockInstances from './RockInstances.js'
 
 /**
  * Smaller rocks that fall on the main rock and stick to it.
@@ -23,10 +24,8 @@ export default class Fragments
     constructor(rock)
     {
         this.experience = new Experience()
-        this.resources = this.experience.resources
         this.time = this.experience.time
         this.camera = this.experience.camera
-        this.renderer = this.experience.renderer
         this.physics = this.experience.physics
         this.debug = this.experience.debug
 
@@ -38,11 +37,11 @@ export default class Fragments
             spawnMax: 24.3,   // Furthest start; the ones coming from the back can't start off screen
             appearTime: 3,    // Seconds they take to grow to full size (hides the ones that start in view)
             spin: 1.04,       // Maximum tumbling speed at launch (rad/s)
-            gravity: 5.04,    // Acceleration towards the centre (units/s²)
-            damping: 0.8,     // Linear and angular velocity lost per second while flying
-            grip: 4,          // Same, while touching something static: what makes them stick instead of roll
-            bounce: 0.19,     // Restitution
-            friction: 0.25,
+            gravity: 5.29,    // Acceleration towards the centre (units/s²)
+            damping: 1.18,    // Linear and angular velocity lost per second while flying
+            grip: 3.3,        // Same, while touching something static: what makes them stick instead of roll
+            bounce: 0.38,     // Restitution
+            friction: 0.14,
             stickSpeed: 1,    // Below this speed (units/s) a resting fragment counts as still...
             stickTime: 2,     // ...and after this many seconds still, it gets stuck
             hitSpeed: 0.3     // Speed lost in one frame (units/s) for a contact to count as a hit on the rock
@@ -61,6 +60,7 @@ export default class Fragments
         ]
 
         this.isLaunched = false
+        this.isSettled = false // True once every fragment is stuck
 
         // Reused in update()
         this.position = new THREE.Vector3()
@@ -77,63 +77,23 @@ export default class Fragments
     }
 
     /**
-     * Geometry, hull points and instanced mesh of each model.
+     * Instanced mesh and hull points of each model.
      */
     setTypes()
     {
-        const anisotropy = Math.min(8, this.renderer.instance.getMaxAnisotropy())
         const vertex = new THREE.Vector3()
-
-        // Parked far above (beyond the camera far plane) until launch()
-        this.matrix.makeTranslation(0, 1000, 0)
 
         for(const type of this.types)
         {
-            const model = this.resources.items[ type.resource ].scene
-            let source = null
-
-            model.updateMatrixWorld(true)
-            model.traverse((child) =>
-            {
-                if(child.isMesh && !source)
-                    source = child
-            })
-
-            // Geometry centred on the origin, which is where its body is
-            type.geometry = source.geometry
-            type.geometry.applyMatrix4(source.matrixWorld)
-            type.geometry.center()
-            type.geometry.computeBoundingSphere()
-            type.radius = type.geometry.boundingSphere.radius
+            type.instances = new RockInstances(type.resource, type.count, this.rock.pivot)
+            type.radius = type.instances.radius
 
             // Rapier builds the convex hull from these points
-            const position = type.geometry.attributes.position
+            const position = type.instances.geometry.attributes.position
             type.points = new Float32Array(position.count * 3)
 
             for(let i = 0; i < position.count; i++)
                 vertex.fromBufferAttribute(position, i).toArray(type.points, i * 3)
-
-            // Material exactly as exported from Blender, like the main rock
-            type.material = source.material
-            type.textures = [ type.material.map, type.material.normalMap, type.material.aoMap ].filter(Boolean)
-
-            for(const texture of type.textures)
-            {
-                texture.anisotropy = anisotropy
-                texture.needsUpdate = true
-            }
-
-            type.mesh = new THREE.InstancedMesh(type.geometry, type.material, type.count)
-            type.mesh.name = type.resource
-            type.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-            type.mesh.frustumCulled = false // Its bounds know nothing about where the instances are
-            type.mesh.castShadow = true
-            type.mesh.receiveShadow = true
-
-            for(let i = 0; i < type.count; i++)
-                type.mesh.setMatrixAt(i, this.matrix)
-
-            this.rock.pivot.add(type.mesh)
         }
     }
 
@@ -195,12 +155,7 @@ export default class Fragments
         camera.updateMatrixWorld()
         pivot.updateMatrixWorld()
 
-        const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0)
-        const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1)
         const toCamera = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 2)
-        const cameraDistance = camera.position.length()
-        const tanVertical = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)
-        const tanHorizontal = tanVertical * camera.aspect
 
         // Nothing comes straight through the lens: directions inside this cone
         // around the camera are pushed to its edge
@@ -223,28 +178,22 @@ export default class Fragments
 
             direction.set(Math.cos(angle) * ring, y, Math.sin(angle) * ring).applyQuaternion(turn)
 
-            let towardsCamera = direction.dot(toCamera)
+            const towardsCamera = direction.dot(toCamera)
 
             if(towardsCamera > Math.cos(cameraCone))
             {
                 sideways.copy(direction).addScaledVector(toCamera, - towardsCamera)
 
                 if(sideways.lengthSq() < 1e-8)
-                    sideways.copy(right)
+                    sideways.setFromMatrixColumn(camera.matrixWorld, 0)
 
                 sideways.normalize()
                 direction.copy(toCamera).multiplyScalar(Math.cos(cameraCone)).addScaledVector(sideways, Math.sin(cameraCone))
-                towardsCamera = Math.cos(cameraCone)
             }
 
-            // Distance at which the direction leaves the screen by its side or
-            // by its top/bottom. Towards the back it may never do
-            const horizontal = Math.abs(direction.dot(right)) + towardsCamera * tanHorizontal
-            const vertical = Math.abs(direction.dot(up)) + towardsCamera * tanVertical
-            const edge = Math.min(
-                horizontal > 1e-3 ? (cameraDistance * tanHorizontal) / horizontal : Infinity,
-                vertical > 1e-3 ? (cameraDistance * tanVertical) / vertical : Infinity
-            )
+            // As close as it can be while still off screen. Towards the back
+            // it never is, hence the maximum
+            const edge = this.camera.getExitDistance(direction)
             const distance = Math.min(edge + this.parameters.spawnMargin * (1 + Math.random() * 0.5), this.parameters.spawnMax)
 
             position.copy(direction).multiplyScalar(distance)
@@ -267,6 +216,27 @@ export default class Fragments
         })
 
         this.isLaunched = true
+        this.isSettled = false
+    }
+
+    /**
+     * Radius of the sphere, centred on the main rock, that contains the rock
+     * and every fragment stuck to it. Orbiters.js stays out of it.
+     */
+    getReach()
+    {
+        let reach = Math.hypot(this.rock.dimensions.halfHeight, this.rock.dimensions.radius)
+
+        if(!this.isLaunched)
+            return reach
+
+        for(const item of this.items)
+        {
+            if(item.isStuck)
+                reach = Math.max(reach, this.position.copy(item.body.translation()).length() + item.type.radius)
+        }
+
+        return reach
     }
 
     /**
@@ -375,8 +345,8 @@ export default class Fragments
             if(independence > 0)
                 this.matrix.premultiply(this.rock.getSwayMatrix(independence, this.swayMatrix).invert())
 
-            item.type.mesh.setMatrixAt(item.index, this.matrix)
-            item.type.mesh.instanceMatrix.needsUpdate = true
+            item.type.instances.mesh.setMatrixAt(item.index, this.matrix)
+            item.type.instances.mesh.instanceMatrix.needsUpdate = true
 
             if(item.isStuck)
                 continue
@@ -425,6 +395,8 @@ export default class Fragments
             }, true)
         }
 
+        this.isSettled = this.isLaunched && this.items.every((item) => item.isStuck)
+
         if(this.helper?.visible)
             this.updateHelper()
     }
@@ -433,16 +405,7 @@ export default class Fragments
     {
         // The bodies are freed with the physics world
         for(const type of this.types)
-        {
-            this.rock.pivot.remove(type.mesh)
-
-            type.mesh.dispose()
-            type.geometry.dispose()
-            type.material.dispose()
-
-            for(const texture of type.textures)
-                texture.dispose()
-        }
+            type.instances.destroy()
 
         if(this.helper)
         {

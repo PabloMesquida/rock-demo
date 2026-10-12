@@ -1,6 +1,6 @@
 # Rock Demo
 
-Demo 3D en el navegador con Three.js (WebGPU) y Vite. Una roca gira en un estudio nocturno y, a los 5 s, otras rocas más chicas caen sobre ella y se le quedan pegadas (física con Rapier). Están previstas hasta unas 30 rocas. Va a crecer por etapas: más rocas, instancias y experimentos con TSL. La arquitectura tiene que permitir sumar esas etapas sin rehacer el visor.
+Demo 3D en el navegador con Three.js (WebGPU) y Vite. Una roca gira en un estudio nocturno y, a los 5 s, otras rocas más chicas caen sobre ella y se le quedan pegadas (física con Rapier); cuando terminan, unas rocas pequeñas se acercan y quedan orbitando. Están previstas hasta unas 30 rocas. Va a crecer por etapas: más rocas, instancias y experimentos con TSL. La arquitectura tiene que permitir sumar esas etapas sin rehacer el visor.
 
 Respondé en español.
 
@@ -37,13 +37,15 @@ src/Experience/Background.js        gradiente radial como nodo TSL (uniforms), e
 src/Experience/Utils/               EventEmitter, Sizes, Time, Resources, Debug
 src/Experience/World/World.js       espera a Resources; crea Rock, Environment y Fragments; update() de lo que vive en escena
 src/Experience/World/Rock.js        modelo, anisotropy, pivot de rotación, dimensiones para el encuadre, collider trimesh
-src/Experience/World/Fragments.js   rocas chicas: un InstancedMesh por modelo, un cuerpo con hull convexo por roca, launch()
+src/Experience/World/RockInstances.js un modelo de roca como InstancedMesh (geometría centrada, material del GLB, sombras)
+src/Experience/World/Fragments.js   rocas que caen y se pegan: un cuerpo con hull convexo por roca, launch()
+src/Experience/World/Orbiters.js    rocas pequeñas que orbitan: elipses analíticas, sin física
 src/Experience/World/Environment.js key + rim light (ambas con sombras) y env map PMREM de un "night studio" procedural
 ```
 
 Convenciones (las del PDF, respetarlas):
 - Una clase por archivo, `export default class`. Estilo del PDF: llaves en línea propia (Allman), sin punto y coma, 4 espacios.
-- Las clases obtienen lo que necesitan con `this.experience = new Experience()` (singleton). Excepciones: `PostProcessing` recibe el renderer por parámetro porque se crea dentro del constructor de `Renderer`, y `Fragments` recibe la roca porque `experience.world` puede no existir todavía mientras corre `World.setup()`.
+- Las clases obtienen lo que necesitan con `this.experience = new Experience()` (singleton). Excepciones: `PostProcessing` recibe el renderer por parámetro porque se crea dentro del constructor de `Renderer`; `Fragments` recibe la roca y `Orbiters` recibe los fragmentos porque `experience.world` puede no existir todavía mientras corre `World.setup()`; `RockInstances` recibe modelo, cantidad y padre, como `Resources` recibe sus fuentes.
 - Métodos `setX()` en el constructor (`setInstance`, `setModel`, `setDebug`…). Además `resize()`, `update()` y `destroy()` cuando hacen falta, llamados desde el padre (nunca escuchar `window` directamente salvo en `Sizes`).
 - Eventos con `EventEmitter`: `sizes 'resize'`, `time 'tick'`, `resources 'ready'` (más `'progress'` y `'error'`). Para no perder un `'ready'` que ya ocurrió, usar `resources.whenReady(cb)`. Si un asset falla, `'ready'` no llega nunca y el canvas queda invisible: mirar la consola.
 - `Time` mide en **segundos** (el PDF usa ms). Toda animación usa `this.time.delta`. El delta está limitado a 0.1 s.
@@ -54,6 +56,7 @@ Convenciones (las del PDF, respetarlas):
 
 - Nuevos objetos o sistemas de escena (instancias, experimentos TSL): nueva clase en `World/`, creada en `World.setup()` y actualizada en `World.update()`.
 - Más rocas que caen: copiar el GLB a `public/models/rock_NN/`, añadirlo a `sources.js` y sumar una entrada `{ resource, count }` en `Fragments.types` (o subir `count` para repetir un modelo). El hull se calcula solo. Probado con 30.
+- Más rocas que orbitan: lo mismo, pero la entrada va en `Orbiters.types`.
 - Nuevos assets: entrada en `sources.js` (tipos soportados por `Resources`: `gltfModel` y `texture`; añadir loader ahí si hace falta otro).
 - Nuevos efectos de pantalla: en `PostProcessing.js`, antes de `renderOutput()` si trabajan en lineal/HDR, después si trabajan sobre la imagen final. FXAA y el dither van siempre al final.
 - Referencias en `../Referencias/` (carpeta local, fuera del repo): `11 — TSL - Post-processing.pdf`, `13 — TSL - Instances.pdf`, `19 — TSL - Sphere Particles Physics.pdf`, `26 — Code structuring for bigger projects.pdf`. Leer el que corresponda antes de implementar esa parte (`pdftotext -layout` funciona; el lector de PDF no).
@@ -74,11 +77,23 @@ Rapier en CPU. La primera versión seguía `19 — TSL - Sphere Particles Physic
 - `world.free()` libera todos los cuerpos y colliders: no hay que quitarlos uno por uno en `destroy()`.
 - `#debug` → carpeta `fragments`: parámetros, botón `launch` para repetir la caída y `show colliders` (líneas de `world.debugRender()`).
 
+## Rocas en órbita (`Orbiters.js`)
+
+No son cuerpos de Rapier: cada una sigue una elipse con la roca principal en un foco, así que no pueden caerse, chocar ni pegarse.
+
+- Se lanzan cuando `fragments.isSettled` (todas las rocas grandes pegadas) más `delay`.
+- Cada órbita deja libre la esfera `fragments.getReach()` (la roca y todo lo pegado) más `gap`, y se reparten en carriles dentro de `band` para no cruzarse a la misma distancia. Planos casi horizontales (`tilt`), todas en el sentido de giro de la roca.
+- Velocidad tipo Kepler: `speed` es la velocidad angular de una órbita circular de radio 1; las más abiertas van más lento.
+- **Acercamiento:** la misma elipse escalada (`approach`) que se encoge exponencialmente a su tamaño real (`approachTime`), lo que dibuja una espiral. Arrancan fuera de cuadro con `camera.getExitDistance()`, nunca desde delante de la cámara.
+- Viven en espacio de mundo (hijas de la escena, no del pivot): no giran ni se sacuden con la roca.
+- Si se relanzan las rocas grandes desde el panel con las pequeñas ya en órbita, pueden atravesarse: no hay colisión entre ellas.
+- `#debug` → carpeta `orbiters`. Los controles marcados "(next launch)" solo se aplican al volver a lanzar.
+
 ## Sombras
 
 Todas las rocas generan y reciben sombras de las dos luces direccionales. `renderer.shadowMap.enabled` se activa en `Renderer.js`; cada luz se configura en `Environment.setShadow()` y cada malla activa `castShadow` / `receiveShadow` en su clase.
 
-- La cámara de sombra de cada luz es una caja de ±2 centrada en el origen, con near 0.1 y far 12: cubre la roca principal con rocas apiladas y cualquier posición de luz que permita el panel. Si el conjunto crece más allá de 2 unidades del centro, hay que agrandarla.
+- La cámara de sombra de cada luz es una caja de ±2 centrada en el origen, con near 0.1 y far 12: cubre la roca principal con rocas apiladas y cualquier posición de luz que permita el panel. Si el conjunto (órbitas incluidas, que hoy llegan a ~2.0) crece más allá de 2 unidades del centro, hay que agrandarla.
 - Mapas de 2048², PCF (el tipo por defecto), `bias` −0.0005. `normalBias` y `radius` van por luz: key 0.02 y 2; rim 0.034 y 5. Los tres se ajustan en `#debug` → `environment` → cada luz.
 - El env map no proyecta sombras, así que las zonas en sombra no quedan negras.
 - Un fragmento en vuelo solo proyecta sombra cuando entra en esa caja.
@@ -98,7 +113,7 @@ Todas las rocas generan y reciben sombras de las dos luces direccionales. `rende
 
 ## Assets: `public/models/rock_NN/rockDemo_NN.glb`
 
-`rock_00` es la roca principal; de `rock_01` en adelante son los fragmentos (mismo formato; texturas 1024² / 512², ~0.45 de diámetro frente a 0.67 × 1.23 × 0.81 de la principal). Lo que sigue describe `rock_00`:
+`rock_00` es la roca principal; de `rock_01` en adelante son los fragmentos y `rock_s_NN` las pequeñas que orbitan (0.14 a 0.34 de tamaño) (mismo formato; texturas 1024² / 512², ~0.45 de diámetro frente a 0.67 × 1.23 × 0.81 de la principal). Lo que sigue describe `rock_00`:
 
 - Exportado desde Blender (Khronos glTF I/O). Es autocontenido: material "Rock" con baseColor, normal y occlusion embebidas como WebP 2048² (`EXT_texture_webp`), roughness 0.9 y metalness 0, doubleSided.
 - Requiere `EXT_meshopt_compression` y `EXT_texture_webp`: el `GLTFLoader` de `Resources` ya tiene `setMeshoptDecoder(MeshoptDecoder)`; WebP lo soporta sin configurar nada.
@@ -113,4 +128,4 @@ Producto en estudio oscuro, nocturno, minimalista. La roca protagonista, centrad
 
 Los valores finales los ajustó el usuario en el panel `#debug` y ya están como defaults en el código: cámara (`Camera.js` → `framing`), fondo (`Background.js` → `parameters`), exposure (`Renderer.js`), bloom (`PostProcessing.js` → `parameters`), luces y env map (`Environment.js`). **No cambiarlos sin pedirlo.** Si un cambio los afecta, avisar.
 
-Los valores de `Fragments.js` (`parameters`), la rim light (incluida su sombra) y la intensidad del env map también los ajustó el usuario en el panel. Los de la reacción al golpe (`Rock.js` → `parameters`), `hitSpeed` y la sombra de la key light son un primer ajuste hecho sin verlo en tiempo real: todavía no los validó. El encuadre de la cámara solo tiene en cuenta la roca principal: con muchas rocas el conjunto puede salirse del cuadro.
+Los valores de `Fragments.js` (`parameters`), la rim light (incluida su sombra) y la intensidad del env map también los ajustó el usuario en el panel. Las órbitas (`Orbiters.js` → `parameters`) también las ajustó él. Los de la reacción al golpe (`Rock.js` → `parameters`), `hitSpeed` y la sombra de la key light son un primer ajuste hecho sin verlo en tiempo real: todavía no los validó. El encuadre de la cámara solo tiene en cuenta la roca principal: con muchas rocas el conjunto puede salirse del cuadro.

@@ -2,11 +2,12 @@ import Experience from '../Experience.js'
 import Rock from './Rock.js'
 import Environment from './Environment.js'
 import Fragments from './Fragments.js'
+import Orbiters from './Orbiters.js'
 
 /**
  * Everything that lives in the 3D scene. Waits for the resources, then
- * creates the rock, the environment (lights + environment map) and the
- * fragments that fall on the rock.
+ * creates the rock, the environment (lights + environment map), the
+ * fragments that fall on the rock and the small rocks that orbit it.
  *
  * Future stages (instances, TSL experiments) are meant to be added here as
  * new World/ classes, updated from update().
@@ -33,6 +34,7 @@ export default class World
         this.environment = new Environment()
 
         this.fragments = new Fragments(this.rock)
+        this.orbiters = new Orbiters(this.fragments)
 
         this.camera.frame(this.rock.dimensions)
 
@@ -49,10 +51,16 @@ export default class World
 
         if(this.fragments)
             this.fragments.update()
+
+        if(this.orbiters)
+            this.orbiters.update()
     }
 
     destroy()
     {
+        if(this.orbiters)
+            this.orbiters.destroy()
+
         if(this.fragments)
             this.fragments.destroy()
 

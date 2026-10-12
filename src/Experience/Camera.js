@@ -85,6 +85,33 @@ export default class Camera
         return Math.max(distanceForHeight / this.framing.fill, distanceForWidth / this.framing.fillWidth) + radius
     }
 
+    /**
+     * Distance from the target, along a world direction, at which a point
+     * leaves the screen by its side or by its top/bottom. Infinity when it
+     * never does (directions that go away from the camera).
+     */
+    getExitDistance(direction)
+    {
+        this.instance.updateMatrixWorld()
+
+        const right = new THREE.Vector3().setFromMatrixColumn(this.instance.matrixWorld, 0)
+        const up = new THREE.Vector3().setFromMatrixColumn(this.instance.matrixWorld, 1)
+        const toCamera = new THREE.Vector3().setFromMatrixColumn(this.instance.matrixWorld, 2)
+        const distance = this.instance.position.distanceTo(this.controls.target)
+        const tanVertical = Math.tan(THREE.MathUtils.degToRad(this.instance.fov) / 2)
+        const tanHorizontal = tanVertical * this.instance.aspect
+
+        // The screen narrows towards the camera and widens away from it
+        const towardsCamera = direction.dot(toCamera)
+        const horizontal = Math.abs(direction.dot(right)) + towardsCamera * tanHorizontal
+        const vertical = Math.abs(direction.dot(up)) + towardsCamera * tanVertical
+
+        return Math.min(
+            horizontal > 1e-3 ? (distance * tanHorizontal) / horizontal : Infinity,
+            vertical > 1e-3 ? (distance * tanVertical) / vertical : Infinity
+        )
+    }
+
     applyFraming(direction)
     {
         const fitDistance = this.getFitDistance()
