@@ -48,7 +48,7 @@ export default class Orbiters
 
         this.parameters = {
             delay: 0.5,         // Seconds between the last fragment getting stuck and the launch
-            gap: 0.03,          // Closest any orbit gets to the rock and what is stuck to it
+            gap: 0,          // Closest any orbit gets to the rock and what is stuck to it
             band: 0.63,         // Width of the zone, beyond the gap, where the orbits are spread
             eccentricity: 0.02, // Maximum; 0 = circles
             tilt: 0.55,         // Maximum inclination of the orbits (radians from horizontal)

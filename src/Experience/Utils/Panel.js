@@ -15,12 +15,12 @@ export default class Panel
     constructor(active)
     {
         this.active = active
-
+    
         if(this.active)
         {
             this.ui = new GUI({ title: 'Controls', width: 280 })
             this.ui.domElement.classList.add('panel')
-
+                this.ui.close()
             // Folded on small screens, where it would cover the rock
             if(window.matchMedia('(max-width: 720px)').matches)
                 this.ui.close()
